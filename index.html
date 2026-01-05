@@ -229,7 +229,7 @@
 
     // Temporary capsule (hidden after avatar loads)
     const tempCapsule = new THREE.Mesh(
-      new THREE.CapsuleGeometry?.(0.55, 1.0, 6, 12) ?? new THREE.CylinderGeometry(0.55,0.55,1.8,16),
+      new THREE.CylinderGeometry(0.55, 0.55, 1.8, 16),
       new THREE.MeshStandardMaterial({ color:0x9fb6ff, roughness:0.35, metalness:0.1 })
     );
     tempCapsule.castShadow = true;
