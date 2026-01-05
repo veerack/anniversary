@@ -24,7 +24,6 @@
     }
     #hint { opacity:0.85; margin-top:6px; font-size:13px; }
 
-    /* Center memory popup */
     #panel{
       position: fixed;
       left: 50%;
@@ -99,70 +98,25 @@
     import { OrbitControls } from "three/addons/controls/OrbitControls.js";
     import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
     import { FBXLoader } from "three/addons/loaders/FBXLoader.js";
+    import * as SkeletonUtils from "three/addons/utils/SkeletonUtils.js";
 
     // ====== EDIT THESE ======
     const AVATAR_URL = "https://models.readyplayer.me/695c48e31c1817592c4ec48b.glb";
 
+    // IMPORTANT: use RELATIVE paths so GitHub Pages always works
     const ANIMS = {
-      Idle: "/anniversary/assets/anim/Idle.fbx",
-      Walk: "/anniversary/assets/anim/Walk.fbx",
-      Run:  "/anniversary/assets/anim/Run.fbx",
-      Jump: "/anniversary/assets/anim/Jump.fbx",
+      Idle: "assets/anim/Idle.fbx",
+      Walk: "assets/anim/Walk.fbx",
+      Run:  "assets/anim/Run.fbx",
+      Jump: "assets/anim/Jump.fbx",
     };
 
     const MEMORIES = [
-      { id:"first-meet",  title:"How we met",         text:"Write a short story here.", pos:new THREE.Vector3(-6,0,-4) },
-      { id:"first-date",  title:"First date",         text:"Where did you go? One detail you remember.", pos:new THREE.Vector3(6,0,-2) },
-      { id:"moment",      title:"The moment I knew",  text:"One moment that made it clear she’s your person.", pos:new THREE.Vector3(-2,0,7) },
-      { id:"future",      title:"What’s next",        text:"Something you’re excited to do together this year.", pos:new THREE.Vector3(7,0,7) },
+      { id:"first-meet",  title:"How we met",        text:"Write a short story here.", pos:new THREE.Vector3(-6,0,-4) },
+      { id:"first-date",  title:"First date",        text:"Where did you go? One detail you remember.", pos:new THREE.Vector3(6,0,-2) },
+      { id:"moment",      title:"The moment I knew", text:"One moment that made it clear she’s your person.", pos:new THREE.Vector3(-2,0,7) },
+      { id:"future",      title:"What’s next",       text:"Something you’re excited to do together this year.", pos:new THREE.Vector3(7,0,7) },
     ];
-
-    // ====== Helpers: bone name normalization ======
-    function normalizeBoneName(name){
-      // Common cases:
-      // Mixamo: mixamorigHips, mixamorigSpine, ...
-      // RPM:    Hips, Spine, ...
-      return name
-        .replace(/^mixamorig/i, "")
-        .replace(/^Armature\|/i, "")
-        .replace(/^Root\|/i, "");
-    }
-
-    function buildBoneMap(root){
-      const map = new Map();
-      root.traverse((o) => {
-        if (o.isBone) map.set(normalizeBoneName(o.name), o);
-      });
-      return map;
-    }
-
-    function retargetMixamoClip(clip, sourceRoot, targetRoot){
-      const src = buildBoneMap(sourceRoot);
-      const dst = buildBoneMap(targetRoot);
-      const tracks = [];
-
-      for (const t of clip.tracks){
-        const [rawNode, prop] = t.name.split(".");
-        const node = normalizeBoneName(rawNode);
-
-        const srcBone = src.get(node);
-        const dstBone = dst.get(node);
-        if (!srcBone || !dstBone) continue;
-
-        const times = t.times.slice();
-        const values = t.values.slice();
-
-        const trackName = `${dstBone.name}.${prop}`;
-
-        if (t.ValueTypeName === "quaternion"){
-          tracks.push(new THREE.QuaternionKeyframeTrack(trackName, times, values));
-        } else if (t.ValueTypeName === "vector"){
-          tracks.push(new THREE.VectorKeyframeTrack(trackName, times, values));
-        }
-      }
-
-      return new THREE.AnimationClip(clip.name, clip.duration, tracks);
-    }
 
     // ====== Scene setup ======
     const app = document.getElementById("app");
@@ -172,7 +126,9 @@
     const camera = new THREE.PerspectiveCamera(65, window.innerWidth/window.innerHeight, 0.1, 200);
     camera.position.set(0, 10, 14);
 
-    const renderer = new THREE.WebGLRenderer({ antialias:true, alpha:true });
+    // FIX: remove alpha:true (prevents transparency/depth issues with RPM)
+    const renderer = new THREE.WebGLRenderer({ antialias:true });
+    renderer.setClearColor(0x05060a, 1);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.setSize(window.innerWidth, window.innerHeight);
     renderer.shadowMap.enabled = true;
@@ -222,12 +178,12 @@
     }
     pillar(-10,10); pillar(10,-10); pillar(0,0);
 
-    // ====== Player + Avatar ======
+    // ====== Player (container) ======
     const player = new THREE.Group();
     player.position.set(0,0,8);
     scene.add(player);
 
-    // Temporary capsule (hidden after avatar loads)
+    // temp cylinder so you see something while loading
     const tempCapsule = new THREE.Mesh(
       new THREE.CylinderGeometry(0.55, 0.55, 1.8, 16),
       new THREE.MeshStandardMaterial({ color:0x9fb6ff, roughness:0.35, metalness:0.1 })
@@ -236,6 +192,7 @@
     tempCapsule.position.y = 1.0;
     player.add(tempCapsule);
 
+    // ====== Load avatar + animations ======
     const gltfLoader = new GLTFLoader();
     const fbxLoader  = new FBXLoader();
 
@@ -254,69 +211,86 @@
       currentAction.reset().fadeIn(fade).play();
     }
 
-    async function loadFBXAnim(name, url, mixamoSkeletonRoot){
+    function forceMeshRenderStability(root){
+      root.traverse((o) => {
+        if (o.isMesh) {
+          o.castShadow = true;
+          o.receiveShadow = true;
+          o.frustumCulled = false;     // FIX: stop bounds culling issues
+          o.visible = true;
+
+          // FIX: RPM often uses transparent materials (hair/eyes/lashes).
+          // This avoids "flash then vanish" depth-sorting bugs.
+          const mats = Array.isArray(o.material) ? o.material : [o.material];
+          for (const m of mats) {
+            if (!m) continue;
+            m.transparent = false;
+            m.depthWrite = true;
+            m.depthTest = true;
+            m.needsUpdate = true;
+          }
+        }
+      });
+    }
+
+    function loadAnimFBX(url){
       return new Promise((resolve, reject) => {
         fbxLoader.load(url, (fbx) => {
           const clip = fbx.animations && fbx.animations[0];
-          if (!clip) return reject(new Error(`No animation in ${url}`));
-          const retargeted = retargetMixamoClip(clip, fbx, avatarRoot);
-
-          const action = mixer.clipAction(retargeted);
-          action.enabled = true;
-          action.clampWhenFinished = true;
-          action.loop = (name === "Jump") ? THREE.LoopOnce : THREE.LoopRepeat;
-
-          actions[name] = action;
-          resolve();
+          if (!clip) return reject(new Error("No animation in " + url));
+          resolve({ fbx, clip });
         }, undefined, reject);
       });
     }
 
-    async function loadAvatarAndAnims(){
-      gltfLoader.load(AVATAR_URL, async (gltf) => {
-        avatarRoot = gltf.scene;
+    gltfLoader.load(AVATAR_URL, async (gltf) => {
+      avatarRoot = gltf.scene;
 
-        avatarRoot.traverse((o) => {
-          if (o.isMesh) { 
-            o.castShadow = true; 
-            o.receiveShadow = true;
-            o.frustumCulled = false;
-          }
-        });
+      // Stabilize rendering
+      forceMeshRenderStability(avatarRoot);
 
-        // tweak scale/height if needed
-        avatarRoot.scale.setScalar(1.0);
+      // Ensure sane transforms
+      avatarRoot.position.set(0,0,0);
+      avatarRoot.rotation.set(0,0,0);
+      avatarRoot.scale.set(1,1,1);
 
-        player.add(avatarRoot);
-        avatarRoot.position.set(0, 0, 0);
-        avatarRoot.scale.set(1, 1, 1);
-        
-        // lift it slightly so you can always see it
-        avatarRoot.position.y = 0.0;
-        player.position.y = 0.0;
-        console.log("avatar scale", avatarRoot.scale);
-        tempCapsule.visible = false;
-        player.remove(tempCapsule);
+      player.add(avatarRoot);
 
-        mixer = new THREE.AnimationMixer(avatarRoot);
+      player.remove(tempCapsule);
 
-        try{
-          await Promise.all([
-            loadFBXAnim("Idle", ANIMS.Idle),
-            loadFBXAnim("Walk", ANIMS.Walk),
-            loadFBXAnim("Run",  ANIMS.Run),
-            loadFBXAnim("Jump", ANIMS.Jump),
-          ]);
-          playAction("Idle", 0.0);
-          console.log("Animations loaded:", Object.keys(actions));
-        } catch(e){
-          console.error("Animation load/retarget failed:", e);
-        }
+      mixer = new THREE.AnimationMixer(avatarRoot);
 
-      }, undefined, (e) => console.error("Avatar load failed:", e));
-    }
+      try{
+        // Load the Mixamo animation sources
+        const [idle, walk, run, jump] = await Promise.all([
+          loadAnimFBX(ANIMS.Idle),
+          loadAnimFBX(ANIMS.Walk),
+          loadAnimFBX(ANIMS.Run),
+          loadAnimFBX(ANIMS.Jump),
+        ]);
 
-    loadAvatarAndAnims();
+        // Retarget clips to avatar using SkeletonUtils (more reliable than name-matching)
+        const idleClip = SkeletonUtils.retargetClip(avatarRoot, idle.fbx, idle.clip, { preserveMatrix: false });
+        const walkClip = SkeletonUtils.retargetClip(avatarRoot, walk.fbx, walk.clip, { preserveMatrix: false });
+        const runClip  = SkeletonUtils.retargetClip(avatarRoot, run.fbx,  run.clip,  { preserveMatrix: false });
+        const jumpClip = SkeletonUtils.retargetClip(avatarRoot, jump.fbx, jump.clip, { preserveMatrix: false });
+
+        actions.Idle = mixer.clipAction(idleClip);
+        actions.Walk = mixer.clipAction(walkClip);
+        actions.Run  = mixer.clipAction(runClip);
+        actions.Jump = mixer.clipAction(jumpClip);
+
+        actions.Jump.loop = THREE.LoopOnce;
+        actions.Jump.clampWhenFinished = true;
+
+        console.log("Animations ready:", Object.keys(actions));
+        playAction("Idle", 0.0);
+
+      } catch (e){
+        console.error("Animation load/retarget failed:", e);
+      }
+
+    }, undefined, (e) => console.error("Avatar load failed:", e));
 
     // ====== Camera controls ======
     const controls = new OrbitControls(camera, renderer.domElement);
@@ -412,7 +386,7 @@
 
       const yaw = controls.getAzimuthalAngle();
 
-      // FIX: W forward, S backward
+      // W forward, S backward
       const dirF = new THREE.Vector3(-Math.sin(yaw), 0, -Math.cos(yaw)).normalize();
       const dirR = new THREE.Vector3(dirF.z, 0, -dirF.x).normalize();
 
