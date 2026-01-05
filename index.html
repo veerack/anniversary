@@ -1,0 +1,353 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Our 1 Year</title>
+  <style>
+    html, body { margin:0; height:100%; overflow:hidden; background:#05060a; }
+    #app { position:fixed; inset:0; }
+    #hud {
+      position: fixed;
+      left: 12px; top: 12px;
+      color: rgba(255,255,255,0.9);
+      font: 14px/1.35 system-ui, -apple-system, Segoe UI, Roboto, Arial;
+      z-index: 5;
+      user-select:none;
+      background: rgba(0,0,0,0.35);
+      padding: 10px 12px;
+      border-radius: 12px;
+      backdrop-filter: blur(8px);
+      border: 1px solid rgba(255,255,255,0.12);
+      max-width: 320px;
+    }
+    #hint { opacity:0.85; margin-top:6px; font-size:13px; }
+    #panel {
+      position: fixed;
+      right: 14px; bottom: 14px;
+      width: min(420px, calc(100vw - 28px));
+      max-height: min(55vh, 520px);
+      overflow:auto;
+      z-index: 6;
+      background: rgba(10,12,18,0.82);
+      color: rgba(255,255,255,0.92);
+      border: 1px solid rgba(255,255,255,0.14);
+      border-radius: 18px;
+      padding: 14px 14px 12px;
+      backdrop-filter: blur(10px);
+      display:none;
+    }
+    #panel h2 { margin: 2px 0 8px; font-size: 18px; }
+    #panel p { margin: 0 0 10px; font-size: 14px; opacity:0.92; }
+    #closeBtn {
+      position:absolute;
+      top:10px; right:10px;
+      background: rgba(255,255,255,0.12);
+      color:#fff; border:1px solid rgba(255,255,255,0.14);
+      border-radius: 10px; padding: 6px 10px;
+      cursor:pointer;
+    }
+    #footer {
+      position: fixed;
+      left: 12px; bottom: 12px;
+      z-index: 5;
+      color: rgba(255,255,255,0.65);
+      font: 12px system-ui;
+      background: rgba(0,0,0,0.25);
+      padding: 6px 10px;
+      border-radius: 12px;
+      border: 1px solid rgba(255,255,255,0.10);
+      user-select:none;
+    }
+    a { color: #a8c7ff; }
+    code { color: #d7e3ff; }
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+
+  <div id="hud">
+    <div><strong>Controls:</strong> WASD move · Mouse drag rotate · Walk into glowing spots</div>
+    <div id="hint">Tip: replace the titles/text in <code>MEMORIES</code> inside the code.</div>
+  </div>
+
+  <div id="panel">
+    <button id="closeBtn">Close</button>
+    <h2 id="panelTitle"></h2>
+    <p id="panelText"></p>
+    <div id="panelExtra"></div>
+  </div>
+
+  <div id="footer">Built for us 💙</div>
+
+  <script type="module">
+    import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js";
+    import { OrbitControls } from "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/controls/OrbitControls.js";
+
+    // ====== EDIT THESE: your relationship “memory spots” ======
+    const MEMORIES = [
+      {
+        id: "first-meet",
+        title: "How we met",
+        text: "Write a short story here. Keep it simple and specific.",
+        pos: new THREE.Vector3(-6, 0, -4),
+      },
+      {
+        id: "first-date",
+        title: "First date",
+        text: "Where did you go? What small detail do you remember?",
+        pos: new THREE.Vector3(6, 0, -2),
+      },
+      {
+        id: "hard-moment",
+        title: "The moment I knew",
+        text: "One moment that made it clear she’s your person.",
+        pos: new THREE.Vector3(-2, 0, 7),
+      },
+      {
+        id: "future",
+        title: "What’s next",
+        text: "Something you’re excited to do together this year.",
+        pos: new THREE.Vector3(7, 0, 7),
+      },
+    ];
+
+    // ====== Basic setup ======
+    const app = document.getElementById("app");
+    const scene = new THREE.Scene();
+    scene.fog = new THREE.Fog(0x05060a, 10, 55);
+
+    const camera = new THREE.PerspectiveCamera(65, window.innerWidth/window.innerHeight, 0.1, 200);
+    camera.position.set(0, 10, 14);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.shadowMap.enabled = true;
+    app.appendChild(renderer.domElement);
+
+    // Lights
+    const hemi = new THREE.HemisphereLight(0xaecbff, 0x1a1d2b, 0.95);
+    scene.add(hemi);
+
+    const dir = new THREE.DirectionalLight(0xffffff, 1.1);
+    dir.position.set(12, 18, 10);
+    dir.castShadow = true;
+    dir.shadow.mapSize.set(1024, 1024);
+    dir.shadow.camera.left = -25;
+    dir.shadow.camera.right = 25;
+    dir.shadow.camera.top = 25;
+    dir.shadow.camera.bottom = -25;
+    scene.add(dir);
+
+    // Ground (simple “map”)
+    const groundGeo = new THREE.PlaneGeometry(40, 40, 1, 1);
+    const groundMat = new THREE.MeshStandardMaterial({ color: 0x0b1020, roughness: 0.95, metalness: 0.0 });
+    const ground = new THREE.Mesh(groundGeo, groundMat);
+    ground.rotation.x = -Math.PI / 2;
+    ground.receiveShadow = true;
+    scene.add(ground);
+
+    // “Walls” / boundaries (so it feels like a small map)
+    const wallMat = new THREE.MeshStandardMaterial({ color: 0x111634, roughness: 0.9 });
+    function wall(w, h, d, x, y, z) {
+      const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), wallMat);
+      m.position.set(x, y, z);
+      m.castShadow = true;
+      m.receiveShadow = true;
+      scene.add(m);
+      return m;
+    }
+    // Perimeter walls
+    wall(40, 2.5, 0.8, 0, 1.25, -20);
+    wall(40, 2.5, 0.8, 0, 1.25, 20);
+    wall(0.8, 2.5, 40, -20, 1.25, 0);
+    wall(0.8, 2.5, 40, 20, 1.25, 0);
+
+    // Some “props” so it’s not empty
+    const propMat = new THREE.MeshStandardMaterial({ color: 0x1a2250, roughness: 0.8 });
+    function pillar(x, z) {
+      const p = new THREE.Mesh(new THREE.CylinderGeometry(0.6, 0.8, 3.2, 18), propMat);
+      p.position.set(x, 1.6, z);
+      p.castShadow = true;
+      p.receiveShadow = true;
+      scene.add(p);
+      return p;
+    }
+    pillar(-10, 10); pillar(10, -10); pillar(0, 0);
+
+    // Player character (simple capsule-ish)
+    const player = new THREE.Group();
+    const body = new THREE.Mesh(
+      new THREE.CapsuleGeometry(0.55, 1.0, 6, 12),
+      new THREE.MeshStandardMaterial({ color: 0x9fb6ff, roughness: 0.35, metalness: 0.1 })
+    );
+    body.castShadow = true;
+    body.position.y = 1.0;
+    player.add(body);
+
+    // Little “face” dot
+    const face = new THREE.Mesh(
+      new THREE.SphereGeometry(0.08, 16, 16),
+      new THREE.MeshStandardMaterial({ color: 0x0b1020 })
+    );
+    face.position.set(0, 1.35, 0.55);
+    player.add(face);
+
+    player.position.set(0, 0, 8);
+    scene.add(player);
+
+    // Camera controls (we’ll constrain them a bit)
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.enablePan = false;
+    controls.minDistance = 6;
+    controls.maxDistance = 24;
+    controls.maxPolarAngle = Math.PI * 0.49; // prevent going under ground
+    controls.target.copy(player.position).add(new THREE.Vector3(0, 1.2, 0));
+
+    // Memory spots
+    const spots = [];
+    const spotGeo = new THREE.TorusGeometry(1.0, 0.12, 16, 50);
+    const glowMat = new THREE.MeshStandardMaterial({
+      color: 0x7da6ff,
+      emissive: 0x3b66ff,
+      emissiveIntensity: 1.6,
+      roughness: 0.2,
+      metalness: 0.25
+    });
+
+    for (const mem of MEMORIES) {
+      const ring = new THREE.Mesh(spotGeo, glowMat.clone());
+      ring.rotation.x = Math.PI / 2;
+      ring.position.copy(mem.pos);
+      ring.position.y = 0.12;
+      ring.castShadow = false;
+      ring.receiveShadow = true;
+      scene.add(ring);
+
+      // Small marker above ring
+      const marker = new THREE.Mesh(
+        new THREE.SphereGeometry(0.18, 18, 18),
+        new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0x7da6ff, emissiveIntensity: 1.2 })
+      );
+      marker.position.copy(mem.pos);
+      marker.position.y = 1.35;
+      marker.castShadow = true;
+      scene.add(marker);
+
+      spots.push({ mem, ring, marker });
+    }
+
+    // UI panel
+    const panel = document.getElementById("panel");
+    const panelTitle = document.getElementById("panelTitle");
+    const panelText = document.getElementById("panelText");
+    const panelExtra = document.getElementById("panelExtra");
+    document.getElementById("closeBtn").onclick = () => {
+      panel.style.display = "none";
+      activeSpotId = null;
+    };
+
+    let activeSpotId = null;
+
+    function openMemory(mem) {
+      activeSpotId = mem.id;
+      panelTitle.textContent = mem.title;
+      panelText.textContent = mem.text;
+
+      // Optional extra: add an image if you want later
+      // panelExtra.innerHTML = `<img src="assets/photo1.jpg" style="width:100%;border-radius:14px;margin-top:10px;" />`;
+      panelExtra.innerHTML = "";
+      panel.style.display = "block";
+    }
+
+    // Movement
+    const keys = new Set();
+    window.addEventListener("keydown", (e) => keys.add(e.key.toLowerCase()));
+    window.addEventListener("keyup", (e) => keys.delete(e.key.toLowerCase()));
+
+    const clock = new THREE.Clock();
+    const tmpVec = new THREE.Vector3();
+
+    function clampToMap(pos) {
+      // keep inside walls (slightly inside boundary)
+      pos.x = Math.max(-18.5, Math.min(18.5, pos.x));
+      pos.z = Math.max(-18.5, Math.min(18.5, pos.z));
+    }
+
+    function updatePlayer(dt) {
+      const speed = keys.has("shift") ? 6.2 : 4.2;
+      let forward = 0, right = 0;
+      if (keys.has("w")) forward += 1;
+      if (keys.has("s")) forward -= 1;
+      if (keys.has("d")) right += 1;
+      if (keys.has("a")) right -= 1;
+
+      // move relative to camera yaw
+      const yaw = controls.getAzimuthalAngle();
+      const dirF = new THREE.Vector3(Math.sin(yaw), 0, Math.cos(yaw)).normalize();
+      const dirR = new THREE.Vector3(dirF.z, 0, -dirF.x).normalize();
+
+      tmpVec.set(0,0,0);
+      tmpVec.addScaledVector(dirF, forward);
+      tmpVec.addScaledVector(dirR, right);
+
+      if (tmpVec.lengthSq() > 0) {
+        tmpVec.normalize().multiplyScalar(speed * dt);
+        player.position.add(tmpVec);
+        clampToMap(player.position);
+
+        // Face direction of movement
+        const look = player.position.clone().add(tmpVec.clone().normalize());
+        player.lookAt(look.x, player.position.y, look.z);
+      }
+
+      // Keep camera target on player
+      controls.target.copy(player.position).add(new THREE.Vector3(0, 1.2, 0));
+    }
+
+    function checkMemoryTriggers() {
+      let closest = null;
+      let closestDist = Infinity;
+
+      for (const s of spots) {
+        const d = player.position.distanceTo(s.mem.pos);
+        if (d < closestDist) { closestDist = d; closest = s; }
+      }
+
+      // Trigger radius
+      if (closest && closestDist <= 2.1) {
+        if (activeSpotId !== closest.mem.id) openMemory(closest.mem);
+      }
+    }
+
+    // Animation loop
+    function animate() {
+      requestAnimationFrame(animate);
+      const dt = Math.min(clock.getDelta(), 0.033);
+
+      updatePlayer(dt);
+
+      // Subtle spot animation
+      const t = clock.elapsedTime;
+      for (const s of spots) {
+        s.ring.rotation.z = t * 0.7;
+        s.marker.position.y = 1.35 + Math.sin(t * 2.2 + s.mem.pos.x) * 0.08;
+      }
+
+      checkMemoryTriggers();
+      controls.update();
+      renderer.render(scene, camera);
+    }
+    animate();
+
+    // Resize
+    window.addEventListener("resize", () => {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+  </script>
+</body>
+</html>
