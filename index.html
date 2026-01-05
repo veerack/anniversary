@@ -178,10 +178,24 @@
 
     // Player character (simple capsule-ish)
     const player = new THREE.Group();
-    const body = new THREE.Mesh(
-      new THREE.CapsuleGeometry(0.55, 1.0, 6, 12),
-      new THREE.MeshStandardMaterial({ color: 0x9fb6ff, roughness: 0.35, metalness: 0.1 })
-    );
+    
+    const mat = new THREE.MeshStandardMaterial({ color: 0x9fb6ff, roughness: 0.35, metalness: 0.1 });
+    
+    const cyl = new THREE.Mesh(new THREE.CylinderGeometry(0.55, 0.55, 1.0, 16), mat);
+    cyl.castShadow = true;
+    cyl.position.y = 1.0;
+    player.add(cyl);
+    
+    const top = new THREE.Mesh(new THREE.SphereGeometry(0.55, 16, 16), mat);
+    top.castShadow = true;
+    top.position.y = 1.5;
+    player.add(top);
+    
+    const bottom = new THREE.Mesh(new THREE.SphereGeometry(0.55, 16, 16), mat);
+    bottom.castShadow = true;
+    bottom.position.y = 0.5;
+    player.add(bottom);
+
     body.castShadow = true;
     body.position.y = 1.0;
     player.add(body);
