@@ -295,7 +295,8 @@
         avatarRoot.position.y = 0.0;
         player.position.y = 0.0;
         console.log("avatar scale", avatarRoot.scale);
-        tempCapsule.visible = true;
+        tempCapsule.visible = false;
+        player.remove(tempCapsule);
 
         mixer = new THREE.AnimationMixer(avatarRoot);
 
