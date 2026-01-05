@@ -277,13 +277,24 @@
         avatarRoot = gltf.scene;
 
         avatarRoot.traverse((o) => {
-          if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; }
+          if (o.isMesh) { 
+            o.castShadow = true; 
+            o.receiveShadow = true;
+            o.frustumCulled = false;
+          }
         });
 
         // tweak scale/height if needed
         avatarRoot.scale.setScalar(1.0);
 
         player.add(avatarRoot);
+        avatarRoot.position.set(0, 0, 0);
+        avatarRoot.scale.set(1, 1, 1);
+        
+        // lift it slightly so you can always see it
+        avatarRoot.position.y = 0.0;
+        player.position.y = 0.0;
+        console.log("avatar scale", avatarRoot.scale);
         tempCapsule.visible = false;
 
         mixer = new THREE.AnimationMixer(avatarRoot);
