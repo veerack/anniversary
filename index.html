@@ -7,7 +7,8 @@
   <style>
     html, body { margin:0; height:100%; overflow:hidden; background:#05060a; }
     #app { position:fixed; inset:0; }
-    #hud {
+
+    #hud{
       position: fixed;
       left: 12px; top: 12px;
       color: rgba(255,255,255,0.9);
@@ -19,14 +20,18 @@
       border-radius: 12px;
       backdrop-filter: blur(8px);
       border: 1px solid rgba(255,255,255,0.12);
-      max-width: 320px;
+      max-width: 360px;
     }
     #hint { opacity:0.85; margin-top:6px; font-size:13px; }
-    #panel {
+
+    /* Center memory popup */
+    #panel{
       position: fixed;
-      right: 14px; bottom: 14px;
-      width: min(420px, calc(100vw - 28px));
-      max-height: min(55vh, 520px);
+      left: 50%;
+      top: 50%;
+      transform: translate(-50%, -50%);
+      width: min(520px, calc(100vw - 28px));
+      max-height: min(60vh, 520px);
       overflow:auto;
       z-index: 6;
       background: rgba(10,12,18,0.82);
@@ -39,7 +44,7 @@
     }
     #panel h2 { margin: 2px 0 8px; font-size: 18px; }
     #panel p { margin: 0 0 10px; font-size: 14px; opacity:0.92; }
-    #closeBtn {
+    #closeBtn{
       position:absolute;
       top:10px; right:10px;
       background: rgba(255,255,255,0.12);
@@ -47,7 +52,8 @@
       border-radius: 10px; padding: 6px 10px;
       cursor:pointer;
     }
-    #footer {
+
+    #footer{
       position: fixed;
       left: 12px; bottom: 12px;
       z-index: 5;
@@ -59,7 +65,6 @@
       border: 1px solid rgba(255,255,255,0.10);
       user-select:none;
     }
-    a { color: #a8c7ff; }
     code { color: #d7e3ff; }
   </style>
 </head>
@@ -67,8 +72,8 @@
   <div id="app"></div>
 
   <div id="hud">
-    <div><strong>Controls:</strong> WASD move · Mouse drag rotate · Walk into glowing spots</div>
-    <div id="hint">Tip: replace the titles/text in <code>MEMORIES</code> inside the code.</div>
+    <div><strong>Controls:</strong> WASD move · Shift run · Space jump · Mouse drag rotate</div>
+    <div id="hint">Tip: edit <code>MEMORIES</code> in the code.</div>
   </div>
 
   <div id="panel">
@@ -88,40 +93,78 @@
     }
   }
   </script>
-  
+
   <script type="module">
     import * as THREE from "three";
     import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+    import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+    import { FBXLoader } from "three/addons/loaders/FBXLoader.js";
 
-    // ====== EDIT THESE: your relationship “memory spots” ======
+    // ====== EDIT THESE ======
+    const AVATAR_URL = "https://models.readyplayer.me/695c48e31c1817592c4ec48b.glb";
+
+    const ANIMS = {
+      Idle: "/anniversary/assets/anim/Idle.fbx",
+      Walk: "/anniversary/assets/anim/Walk.fbx",
+      Run:  "/anniversary/assets/anim/Run.fbx",
+      Jump: "/anniversary/assets/anim/Jump.fbx",
+    };
+
     const MEMORIES = [
-      {
-        id: "first-meet",
-        title: "How we met",
-        text: "Write a short story here. Keep it simple and specific.",
-        pos: new THREE.Vector3(-6, 0, -4),
-      },
-      {
-        id: "first-date",
-        title: "First date",
-        text: "Where did you go? What small detail do you remember?",
-        pos: new THREE.Vector3(6, 0, -2),
-      },
-      {
-        id: "hard-moment",
-        title: "The moment I knew",
-        text: "One moment that made it clear she’s your person.",
-        pos: new THREE.Vector3(-2, 0, 7),
-      },
-      {
-        id: "future",
-        title: "What’s next",
-        text: "Something you’re excited to do together this year.",
-        pos: new THREE.Vector3(7, 0, 7),
-      },
+      { id:"first-meet",  title:"How we met",         text:"Write a short story here.", pos:new THREE.Vector3(-6,0,-4) },
+      { id:"first-date",  title:"First date",         text:"Where did you go? One detail you remember.", pos:new THREE.Vector3(6,0,-2) },
+      { id:"moment",      title:"The moment I knew",  text:"One moment that made it clear she’s your person.", pos:new THREE.Vector3(-2,0,7) },
+      { id:"future",      title:"What’s next",        text:"Something you’re excited to do together this year.", pos:new THREE.Vector3(7,0,7) },
     ];
 
-    // ====== Basic setup ======
+    // ====== Helpers: bone name normalization ======
+    function normalizeBoneName(name){
+      // Common cases:
+      // Mixamo: mixamorigHips, mixamorigSpine, ...
+      // RPM:    Hips, Spine, ...
+      return name
+        .replace(/^mixamorig/i, "")
+        .replace(/^Armature\|/i, "")
+        .replace(/^Root\|/i, "");
+    }
+
+    function buildBoneMap(root){
+      const map = new Map();
+      root.traverse((o) => {
+        if (o.isBone) map.set(normalizeBoneName(o.name), o);
+      });
+      return map;
+    }
+
+    function retargetMixamoClip(clip, sourceRoot, targetRoot){
+      const src = buildBoneMap(sourceRoot);
+      const dst = buildBoneMap(targetRoot);
+      const tracks = [];
+
+      for (const t of clip.tracks){
+        const [rawNode, prop] = t.name.split(".");
+        const node = normalizeBoneName(rawNode);
+
+        const srcBone = src.get(node);
+        const dstBone = dst.get(node);
+        if (!srcBone || !dstBone) continue;
+
+        const times = t.times.slice();
+        const values = t.values.slice();
+
+        const trackName = `${dstBone.name}.${prop}`;
+
+        if (t.ValueTypeName === "quaternion"){
+          tracks.push(new THREE.QuaternionKeyframeTrack(trackName, times, values));
+        } else if (t.ValueTypeName === "vector"){
+          tracks.push(new THREE.VectorKeyframeTrack(trackName, times, values));
+        }
+      }
+
+      return new THREE.AnimationClip(clip.name, clip.duration, tracks);
+    }
+
+    // ====== Scene setup ======
     const app = document.getElementById("app");
     const scene = new THREE.Scene();
     scene.fog = new THREE.Fog(0x05060a, 10, 55);
@@ -129,16 +172,14 @@
     const camera = new THREE.PerspectiveCamera(65, window.innerWidth/window.innerHeight, 0.1, 200);
     camera.position.set(0, 10, 14);
 
-    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    const renderer = new THREE.WebGLRenderer({ antialias:true, alpha:true });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.setSize(window.innerWidth, window.innerHeight);
     renderer.shadowMap.enabled = true;
     app.appendChild(renderer.domElement);
 
     // Lights
-    const hemi = new THREE.HemisphereLight(0xaecbff, 0x1a1d2b, 0.95);
-    scene.add(hemi);
-
+    scene.add(new THREE.HemisphereLight(0xaecbff, 0x1a1d2b, 0.95));
     const dir = new THREE.DirectionalLight(0xffffff, 1.1);
     dir.position.set(12, 18, 10);
     dir.castShadow = true;
@@ -149,83 +190,132 @@
     dir.shadow.camera.bottom = -25;
     scene.add(dir);
 
-    // Ground (simple “map”)
-    const groundGeo = new THREE.PlaneGeometry(40, 40, 1, 1);
-    const groundMat = new THREE.MeshStandardMaterial({ color: 0x0b1020, roughness: 0.95, metalness: 0.0 });
-    const ground = new THREE.Mesh(groundGeo, groundMat);
-    ground.rotation.x = -Math.PI / 2;
+    // Ground + walls
+    const ground = new THREE.Mesh(
+      new THREE.PlaneGeometry(40, 40),
+      new THREE.MeshStandardMaterial({ color: 0x0b1020, roughness:0.95, metalness:0 })
+    );
+    ground.rotation.x = -Math.PI/2;
     ground.receiveShadow = true;
     scene.add(ground);
 
-    // “Walls” / boundaries (so it feels like a small map)
     const wallMat = new THREE.MeshStandardMaterial({ color: 0x111634, roughness: 0.9 });
-    function wall(w, h, d, x, y, z) {
-      const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), wallMat);
-      m.position.set(x, y, z);
-      m.castShadow = true;
-      m.receiveShadow = true;
+    function wall(w,h,d,x,y,z){
+      const m = new THREE.Mesh(new THREE.BoxGeometry(w,h,d), wallMat);
+      m.position.set(x,y,z);
+      m.castShadow = true; m.receiveShadow = true;
       scene.add(m);
       return m;
     }
-    // Perimeter walls
     wall(40, 2.5, 0.8, 0, 1.25, -20);
     wall(40, 2.5, 0.8, 0, 1.25, 20);
     wall(0.8, 2.5, 40, -20, 1.25, 0);
     wall(0.8, 2.5, 40, 20, 1.25, 0);
 
-    // Some “props” so it’s not empty
+    // Some props
     const propMat = new THREE.MeshStandardMaterial({ color: 0x1a2250, roughness: 0.8 });
-    function pillar(x, z) {
-      const p = new THREE.Mesh(new THREE.CylinderGeometry(0.6, 0.8, 3.2, 18), propMat);
-      p.position.set(x, 1.6, z);
-      p.castShadow = true;
-      p.receiveShadow = true;
+    function pillar(x,z){
+      const p = new THREE.Mesh(new THREE.CylinderGeometry(0.6,0.8,3.2,18), propMat);
+      p.position.set(x,1.6,z);
+      p.castShadow = true; p.receiveShadow = true;
       scene.add(p);
-      return p;
     }
-    pillar(-10, 10); pillar(10, -10); pillar(0, 0);
+    pillar(-10,10); pillar(10,-10); pillar(0,0);
 
-    // Player character (simple capsule-ish)
+    // ====== Player + Avatar ======
     const player = new THREE.Group();
-    
-    const mat = new THREE.MeshStandardMaterial({ color: 0x9fb6ff, roughness: 0.35, metalness: 0.1 });
-    
-    const cyl = new THREE.Mesh(new THREE.CylinderGeometry(0.55, 0.55, 1.0, 16), mat);
-    cyl.castShadow = true;
-    cyl.position.y = 1.0;
-    player.add(cyl);
-    
-    const top = new THREE.Mesh(new THREE.SphereGeometry(0.55, 16, 16), mat);
-    top.castShadow = true;
-    top.position.y = 1.5;
-    player.add(top);
-    
-    const bottom = new THREE.Mesh(new THREE.SphereGeometry(0.55, 16, 16), mat);
-    bottom.castShadow = true;
-    bottom.position.y = 0.5;
-    player.add(bottom);
-
-    // Little “face” dot
-    const face = new THREE.Mesh(
-      new THREE.SphereGeometry(0.08, 16, 16),
-      new THREE.MeshStandardMaterial({ color: 0x0b1020 })
-    );
-    face.position.set(0, 1.35, 0.55);
-    player.add(face);
-
-    player.position.set(0, 0, 8);
+    player.position.set(0,0,8);
     scene.add(player);
 
-    // Camera controls (we’ll constrain them a bit)
+    // Temporary capsule (hidden after avatar loads)
+    const tempCapsule = new THREE.Mesh(
+      new THREE.CapsuleGeometry?.(0.55, 1.0, 6, 12) ?? new THREE.CylinderGeometry(0.55,0.55,1.8,16),
+      new THREE.MeshStandardMaterial({ color:0x9fb6ff, roughness:0.35, metalness:0.1 })
+    );
+    tempCapsule.castShadow = true;
+    tempCapsule.position.y = 1.0;
+    player.add(tempCapsule);
+
+    const gltfLoader = new GLTFLoader();
+    const fbxLoader  = new FBXLoader();
+
+    let avatarRoot = null;
+    let mixer = null;
+    const actions = {};
+    let currentAction = null;
+
+    function playAction(name, fade=0.18){
+      const next = actions[name];
+      if (!next) return;
+      if (currentAction === next) return;
+
+      if (currentAction) currentAction.fadeOut(fade);
+      currentAction = next;
+      currentAction.reset().fadeIn(fade).play();
+    }
+
+    async function loadFBXAnim(name, url, mixamoSkeletonRoot){
+      return new Promise((resolve, reject) => {
+        fbxLoader.load(url, (fbx) => {
+          const clip = fbx.animations && fbx.animations[0];
+          if (!clip) return reject(new Error(`No animation in ${url}`));
+          const retargeted = retargetMixamoClip(clip, fbx, avatarRoot);
+
+          const action = mixer.clipAction(retargeted);
+          action.enabled = true;
+          action.clampWhenFinished = true;
+          action.loop = (name === "Jump") ? THREE.LoopOnce : THREE.LoopRepeat;
+
+          actions[name] = action;
+          resolve();
+        }, undefined, reject);
+      });
+    }
+
+    async function loadAvatarAndAnims(){
+      gltfLoader.load(AVATAR_URL, async (gltf) => {
+        avatarRoot = gltf.scene;
+
+        avatarRoot.traverse((o) => {
+          if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; }
+        });
+
+        // tweak scale/height if needed
+        avatarRoot.scale.setScalar(1.0);
+
+        player.add(avatarRoot);
+        tempCapsule.visible = false;
+
+        mixer = new THREE.AnimationMixer(avatarRoot);
+
+        try{
+          await Promise.all([
+            loadFBXAnim("Idle", ANIMS.Idle),
+            loadFBXAnim("Walk", ANIMS.Walk),
+            loadFBXAnim("Run",  ANIMS.Run),
+            loadFBXAnim("Jump", ANIMS.Jump),
+          ]);
+          playAction("Idle", 0.0);
+          console.log("Animations loaded:", Object.keys(actions));
+        } catch(e){
+          console.error("Animation load/retarget failed:", e);
+        }
+
+      }, undefined, (e) => console.error("Avatar load failed:", e));
+    }
+
+    loadAvatarAndAnims();
+
+    // ====== Camera controls ======
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
     controls.enablePan = false;
     controls.minDistance = 6;
     controls.maxDistance = 24;
-    controls.maxPolarAngle = Math.PI * 0.49; // prevent going under ground
+    controls.maxPolarAngle = Math.PI * 0.49;
     controls.target.copy(player.position).add(new THREE.Vector3(0, 1.2, 0));
 
-    // Memory spots
+    // ====== Memory spots ======
     const spots = [];
     const spotGeo = new THREE.TorusGeometry(1.0, 0.12, 16, 50);
     const glowMat = new THREE.MeshStandardMaterial({
@@ -241,11 +331,9 @@
       ring.rotation.x = Math.PI / 2;
       ring.position.copy(mem.pos);
       ring.position.y = 0.12;
-      ring.castShadow = false;
       ring.receiveShadow = true;
       scene.add(ring);
 
-      // Small marker above ring
       const marker = new THREE.Mesh(
         new THREE.SphereGeometry(0.18, 18, 18),
         new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0x7da6ff, emissiveIntensity: 1.2 })
@@ -258,75 +346,90 @@
       spots.push({ mem, ring, marker });
     }
 
-    // UI panel
+    // ====== UI panel ======
     const panel = document.getElementById("panel");
     const panelTitle = document.getElementById("panelTitle");
     const panelText = document.getElementById("panelText");
-    const panelExtra = document.getElementById("panelExtra");
     document.getElementById("closeBtn").onclick = () => {
       panel.style.display = "none";
       activeSpotId = null;
     };
 
     let activeSpotId = null;
-
-    function openMemory(mem) {
+    function openMemory(mem){
       activeSpotId = mem.id;
       panelTitle.textContent = mem.title;
       panelText.textContent = mem.text;
-
-      // Optional extra: add an image if you want later
-      // panelExtra.innerHTML = `<img src="assets/photo1.jpg" style="width:100%;border-radius:14px;margin-top:10px;" />`;
-      panelExtra.innerHTML = "";
       panel.style.display = "block";
     }
 
-    // Movement
+    // ====== Movement + animation switching ======
     const keys = new Set();
-    window.addEventListener("keydown", (e) => keys.add(e.key.toLowerCase()));
+    let isJumping = false;
+    let jumpCooldown = 0;
+
+    window.addEventListener("keydown", (e) => {
+      const k = e.key.toLowerCase();
+      keys.add(k);
+
+      if ((k === " " || k === "spacebar") && !isJumping && jumpCooldown <= 0) {
+        isJumping = true;
+        jumpCooldown = 0.65;
+        playAction("Jump", 0.05);
+      }
+    });
     window.addEventListener("keyup", (e) => keys.delete(e.key.toLowerCase()));
 
     const clock = new THREE.Clock();
     const tmpVec = new THREE.Vector3();
 
     function clampToMap(pos) {
-      // keep inside walls (slightly inside boundary)
       pos.x = Math.max(-18.5, Math.min(18.5, pos.x));
       pos.z = Math.max(-18.5, Math.min(18.5, pos.z));
     }
 
-    function updatePlayer(dt) {
-      const speed = keys.has("shift") ? 6.2 : 4.2;
+    function updatePlayer(dt){
+      const isRunning = keys.has("shift");
+      const speed = isRunning ? 6.2 : 4.2;
+
       let forward = 0, right = 0;
       if (keys.has("w")) forward += 1;
       if (keys.has("s")) forward -= 1;
       if (keys.has("d")) right += 1;
       if (keys.has("a")) right -= 1;
 
-      // move relative to camera yaw
       const yaw = controls.getAzimuthalAngle();
-      const dirF = new THREE.Vector3(Math.sin(yaw), 0, Math.cos(yaw)).normalize();
+
+      // FIX: W forward, S backward
+      const dirF = new THREE.Vector3(-Math.sin(yaw), 0, -Math.cos(yaw)).normalize();
       const dirR = new THREE.Vector3(dirF.z, 0, -dirF.x).normalize();
 
       tmpVec.set(0,0,0);
       tmpVec.addScaledVector(dirF, forward);
       tmpVec.addScaledVector(dirR, right);
 
-      if (tmpVec.lengthSq() > 0) {
+      const isMoving = tmpVec.lengthSq() > 0;
+
+      if (isMoving && !isJumping) {
         tmpVec.normalize().multiplyScalar(speed * dt);
         player.position.add(tmpVec);
         clampToMap(player.position);
 
-        // Face direction of movement
         const look = player.position.clone().add(tmpVec.clone().normalize());
         player.lookAt(look.x, player.position.y, look.z);
       }
 
-      // Keep camera target on player
       controls.target.copy(player.position).add(new THREE.Vector3(0, 1.2, 0));
+
+      if (Object.keys(actions).length) {
+        if (isJumping) playAction("Jump");
+        else if (isMoving && isRunning) playAction("Run");
+        else if (isMoving) playAction("Walk");
+        else playAction("Idle");
+      }
     }
 
-    function checkMemoryTriggers() {
+    function checkMemoryTriggers(){
       let closest = null;
       let closestDist = Infinity;
 
@@ -335,25 +438,29 @@
         if (d < closestDist) { closestDist = d; closest = s; }
       }
 
-      // Trigger radius
       if (closest && closestDist <= 2.1) {
         if (activeSpotId !== closest.mem.id) openMemory(closest.mem);
       }
     }
 
-    // Animation loop
-    function animate() {
+    function animate(){
       requestAnimationFrame(animate);
       const dt = Math.min(clock.getDelta(), 0.033);
 
       updatePlayer(dt);
 
-      // Subtle spot animation
+      if (jumpCooldown > 0) {
+        jumpCooldown -= dt;
+        if (jumpCooldown <= 0) isJumping = false;
+      }
+
       const t = clock.elapsedTime;
       for (const s of spots) {
         s.ring.rotation.z = t * 0.7;
         s.marker.position.y = 1.35 + Math.sin(t * 2.2 + s.mem.pos.x) * 0.08;
       }
+
+      if (mixer) mixer.update(dt);
 
       checkMemoryTriggers();
       controls.update();
@@ -361,7 +468,6 @@
     }
     animate();
 
-    // Resize
     window.addEventListener("resize", () => {
       camera.aspect = window.innerWidth / window.innerHeight;
       camera.updateProjectionMatrix();
