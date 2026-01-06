@@ -219,7 +219,7 @@
 
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1.0;
+  renderer.toneMappingExposure = 0.88;
   renderer.physicallyCorrectLights = true;
 
   app.appendChild(renderer.domElement);
@@ -238,67 +238,74 @@
   skyU["mieCoefficient"].value = 0.004;
   skyU["mieDirectionalG"].value = 0.85;
 
-  // Sun & Moon lights
-  const sunLight = new THREE.DirectionalLight(0xffffff, 3.2);
+  const sunLight = new THREE.DirectionalLight(0xffffff, 2.6);
   sunLight.castShadow = true;
-  sunLight.shadow.mapSize.set(2048, 2048);
-  sunLight.shadow.camera.left = -40;
-  sunLight.shadow.camera.right = 40;
-  sunLight.shadow.camera.top = 40;
-  sunLight.shadow.camera.bottom = -40;
+  
+  // tighter shadow camera = better resolution
+  sunLight.shadow.mapSize.set(4096, 4096);
   sunLight.shadow.camera.near = 0.5;
-  sunLight.shadow.camera.far = 120;
+  sunLight.shadow.camera.far = 90;
+  sunLight.shadow.camera.left = -22;
+  sunLight.shadow.camera.right = 22;
+  sunLight.shadow.camera.top = 22;
+  sunLight.shadow.camera.bottom = -22;
+  
+  // the “make shadows actually work” knobs:
+  sunLight.shadow.bias = -0.00025;
+  sunLight.shadow.normalBias = 0.02;
+  
   scene.add(sunLight);
 
   const moonLight = new THREE.DirectionalLight(0xbfd6ff, 0.35);
   scene.add(moonLight);
 
-  scene.add(new THREE.AmbientLight(0xffffff, 0.06));
+  scene.add(new THREE.AmbientLight(0xffffff, 0.03));
 
   const pmrem = new THREE.PMREMGenerator(renderer);
-  let envRT = null;
 
   // simple day-night progression (slow)
   let skyTime = 0.12; // [0..1) 0.25-ish = day, 0.75-ish = night
 
+  let envRT = null;
+  let envRefreshTimer = 0;
+  
   function updateSkyAndEnv(dt){
-    // very slow loop
     skyTime = (skyTime + dt * 0.004) % 1;
-
-    // sun elevation: day high, night below horizon
-    const theta = Math.PI * 2 * skyTime; // 0..2pi
-    const elevation = Math.sin(theta) * 35;  // degrees
+  
+    const theta = Math.PI * 2 * skyTime;
+    const elevation = Math.sin(theta) * 35;
     const azimuth = 180 + Math.cos(theta) * 35;
-
+  
     const phi = THREE.MathUtils.degToRad(90 - elevation);
     const th  = THREE.MathUtils.degToRad(azimuth);
-
+  
     const sunPos = new THREE.Vector3().setFromSphericalCoords(1, phi, th);
-    skyU["sunPosition"].value.copy(sunPos);
-
-    // position lights
+    sky.material.uniforms.sunPosition.value.copy(sunPos);
+  
     sunLight.position.copy(sunPos).multiplyScalar(120);
     moonLight.position.copy(sunPos).multiplyScalar(-120);
-
-    // adjust intensities (night dims)
-    const dayFactor = THREE.MathUtils.clamp((elevation + 6) / 18, 0, 1); // 0 at night, 1 at day
-    sunLight.intensity = 3.2 * dayFactor;
+  
+    const dayFactor = THREE.MathUtils.clamp((elevation + 6) / 18, 0, 1);
+    sunLight.intensity = 2.6 * dayFactor;
     moonLight.intensity = 0.35 * (1 - dayFactor);
-
-    // fog color shifts
-    const dayFog = new THREE.Color(0xaecbff);
+  
+    // fog + background
+    const dayFog = new THREE.Color(0xbad8ff);
     const nightFog = new THREE.Color(0x05060a);
     const fogCol = nightFog.clone().lerp(dayFog, dayFactor);
+  
     if (!scene.fog) scene.fog = new THREE.Fog(fogCol, 18, 95);
     scene.fog.color.copy(fogCol);
-
-    // environment map from sky (for reflections)
-    if (envRT) envRT.dispose();
-    envRT = pmrem.fromScene(sky);
-    scene.environment = envRT.texture;
-
-    // background color
     renderer.setClearColor(fogCol, 1);
+  
+    // ✅ refresh environment only sometimes (every ~1.5s)
+    envRefreshTimer -= dt;
+    if (envRefreshTimer <= 0) {
+      envRefreshTimer = 1.5;
+      if (envRT) envRT.dispose();
+      envRT = pmrem.fromScene(sky);
+      scene.environment = envRT.texture;
+    }
   }
 
   // ====== Clouds (billboards with procedural alpha texture) ======
@@ -482,7 +489,7 @@
       roughnessMap: grassRough,
       roughness: 0.95,
       metalness: 0.0,
-      normalScale: new THREE.Vector2(0.8, 0.8),
+      normalScale: new THREE.Vector2(0.45, 0.45),
       envMapIntensity: 0.35,
     })
   );
