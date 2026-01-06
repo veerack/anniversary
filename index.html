@@ -716,15 +716,6 @@
   function placeOnTerrain(obj, x, z, yOffset = 0) {
     obj.position.set(x, terrainHeight(x, z) + yOffset, z);
   }
-
-  (async () => {
-    try {
-      await addGLB({ url:"assets/models/Taxi.glb",   x: 18, z:-14, rot:1.2,  scale:1.0, yOffset:0.0 });
-      await addGLB({ url:"assets/models/SchoolBus.glb", x:-14, z: -8, rot:-0.4, scale:1.0, yOffset:0.0 });
-    } catch (e) {
-      console.error("GLB spawn failed:", e);
-    }
-  })();
   
   function addRock(x, z, s = 1) {
     const g = new THREE.IcosahedronGeometry(0.9 * s, 1);
@@ -774,7 +765,7 @@
     scene.add(tree);
   }
 
-  function scatterScene() {
+  async function scatterScene() {
     for (let i = 0; i < 70; i++) {
       const a = Math.random() * Math.PI * 2;
       const r = 30 + Math.random() * 22;
@@ -782,18 +773,19 @@
       const z = Math.sin(a) * r;
       addTree(x, z, 0.85 + Math.random() * 0.6);
     }
-
+  
     for (let i = 0; i < 45; i++) {
       const x = (Math.random() - 0.5) * 90;
       const z = (Math.random() - 0.5) * 90;
       if (Math.hypot(x, z) < 16) continue;
       addRock(x, z, 0.6 + Math.random() * 1.3);
     }
-
-    await addGLB({ url:"assets/models/Taxi.glb",   x: 18, z:-14, rot:1.2, scale:1.0, yOffset:0.0 });
-    await addGLB({ url:"assets/models/SchoolBus.glb", x:-14, z: -8, rot:-0.4, scale:1.0, yOffset:0.0 });
-
-    const pathMat = new THREE.MeshStandardMaterial({ color: 0x3a3a2f, roughness: 1, metalness: 0, envMapIntensity: 0.0 });
+  
+    // Spawn models once (do it here OR in your IIFE, not both)
+    await addGLB({ url:"assets/models/Taxi.glb",      x: 18,  z:-14, rot: 1.2,  scale: 1.0, yOffset: 0.0 });
+    await addGLB({ url:"assets/models/SchoolBus.glb", x:-14, z: -8, rot:-0.4,  scale: 1.0, yOffset: 0.0 });
+  
+    const pathMat = new THREE.MeshStandardMaterial({ color: 0x3a3a2f, roughness: 1, metalness: 0 });
     for (let i = 0; i < 26; i++) {
       const t = i / 25;
       const x = THREE.MathUtils.lerp(-18, 22, t);
@@ -806,7 +798,7 @@
       scene.add(p);
     }
   }
-  scatterScene();
+  scatterScene(); // ok to not await
 
   // ====== Proper Grass (shader blades: wind + player interaction) ======
   function makeGrassField({
@@ -1445,7 +1437,7 @@
     updateCamera(dt);
     sunSprite.position.copy(camera.position).addScaledVector(sunDir, 220);
     updateClouds(dt, clock.elapsedTime);
-    updateBirds(clock.elapsedTime, dt);\
+    updateBirds(clock.elapsedTime, dt);
     shaderSky.mat.uniforms.uTime.value = clock.elapsedTime;
   
     // grass uniforms
