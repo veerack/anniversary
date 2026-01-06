@@ -706,9 +706,12 @@
   pillar(-10,10); pillar(10,-10); pillar(0,0);
 
   // ====== Player container ======
-  const player = new THREE.Group();
-  player.position.set(0,0,8);
+  const player = new THREE.Group();          // controller (XZ only)
+  player.position.set(0, 0, 8);
   scene.add(player);
+  
+  const playerVisual = new THREE.Group();    // visual (rides terrain)
+  player.add(playerVisual);
   
   // ====== Orbit camera locked to player ======
   const controls = new OrbitControls(camera, renderer.domElement);
@@ -815,7 +818,7 @@
     avatarRoot.position.set(0,0,0);
     avatarRoot.rotation.set(0,0,0);
     avatarRoot.scale.set(1,1,1);
-    player.add(avatarRoot);
+    playerVisual.add(avatarRoot);
 
     mixer = new THREE.AnimationMixer(avatarRoot);
 
@@ -976,6 +979,11 @@
   let jumpRequested = false;
   let danceActive = null;   // "Samba" | "Rumba" | "Salsa" | null
   let groundYSmoothed = terrainHeight(player.position.x, player.position.z);
+  let visualGroundY = 0;
+  const FOOT_OFFSET = 0.95; // adjust 0.7..1.2 until feet touch ground
+
+  let visualGroundY = terrainHeight(player.position.x, player.position.z);
+  playerVisual.position.y = visualGroundY + FOOT_OFFSET;
 
   window.addEventListener("keydown", (e) => {
     const k = e.key.toLowerCase();
@@ -1022,31 +1030,28 @@
     } else if (jumpRequested) {
       jumpRequested = false;
     }
-
+  
     const isRunning = keys.has("shift");
     const speed = isRunning ? RUN_SPEED : WALK_SPEED;
-
+  
     let forward = 0, right = 0;
     if (keys.has("w")) forward += 1;
     if (keys.has("s")) forward -= 1;
     if (keys.has("d")) right += 1;
     if (keys.has("a")) right -= 1;
-
-    // Basis from camera direction
-    const dirF = new THREE.Vector3();
-    camera.getWorldDirection(dirF);
-    dirF.y = 0;
-    dirF.normalize();
-
-    const dirR = new THREE.Vector3().crossVectors(dirF, new THREE.Vector3(0,1,0)).normalize();
-
+  
+    // stable movement basis from orbit azimuth (no camera wobble)
+    const az = controls.getAzimuthalAngle();
+    const dirF = new THREE.Vector3(Math.sin(az), 0, Math.cos(az));
+    const dirR = new THREE.Vector3(Math.sin(az + Math.PI/2), 0, Math.cos(az + Math.PI/2));
+  
     tmpVec.set(0,0,0);
     tmpVec.addScaledVector(dirF, forward);
     tmpVec.addScaledVector(dirR, right);
-
+  
     const isMoving = tmpVec.lengthSq() > 0;
-
-    // rotate toward movement
+  
+    // rotate controller toward movement
     if (isMoving) {
       const mv = tmpVec.clone().normalize();
       const targetYaw = Math.atan2(mv.x, mv.z);
@@ -1054,42 +1059,40 @@
       d = Math.atan2(Math.sin(d), Math.cos(d));
       player.rotation.y += d * Math.min(1, dt * 10);
     }
-
-    // horizontal move
+  
+    // horizontal move ONLY (controller Y stays 0 always)
     if (isMoving) {
       const control = isJumping ? AIR_CONTROL : 1.0;
       tmpVec.normalize().multiplyScalar(speed * control * dt);
       player.position.add(tmpVec);
       clampToMap(player.position);
     }
-
+  
     if (isMoving && danceActive) {
       danceActive = null;
-      // let locomotion take over immediately
       if (currentAction) currentAction.fadeOut(0.08);
     }
-    
-    // jump physics
+  
+    // terrain follow (SMOOTH) — always compute, not only while moving
+    const targetGround = terrainHeight(player.position.x, player.position.z);
+    visualGroundY = THREE.MathUtils.lerp(visualGroundY, targetGround, 1 - Math.pow(0.0001, dt));
+  
+    // jump physics affects ONLY the VISUAL Y, never controller
     if (isJumping) {
       yVel += GRAVITY * dt;
-      player.position.y += yVel * dt;
-
-      const groundY = terrainHeight(player.position.x, player.position.z);
-      groundYSmoothed = groundY; // snap the smoothed baseline on landing
-      
-      if (player.position.y <= groundY) {
-        player.position.y = groundY;
+      playerVisual.position.y += yVel * dt;
+  
+      const landingY = visualGroundY + FOOT_OFFSET;
+      if (playerVisual.position.y <= landingY) {
+        playerVisual.position.y = landingY;
         yVel = 0;
         if (jumpAnimDone) isJumping = false;
       }
+    } else {
+      playerVisual.position.y = visualGroundY + FOOT_OFFSET;
     }
-
-    if (!isJumping) {
-      const gy = terrainHeight(player.position.x, player.position.z);
-      groundYSmoothed = THREE.MathUtils.lerp(groundYSmoothed, gy, 1 - Math.pow(0.001, dt));
-      player.position.y = groundYSmoothed;
-    }
-    
+  
+    // animations
     if (actions.Idle) {
       if (danceActive) playAction(danceActive, 0.06);
       else if (isJumping) playAction("Jump", 0.05);
@@ -1097,27 +1100,24 @@
       else if (isMoving) playAction("Walk", 0.14);
       else playAction("Idle", 0.18);
     }
-    
+  
     // footsteps
     if (!isJumping && isMoving) {
       const interval = isRunning ? STEP_INTERVAL_RUN : STEP_INTERVAL_WALK;
       stepTimer -= dt;
       if (stepTimer <= 0) {
         stepTimer = interval;
-        // strength varies with run/walk
-        const strength = isRunning ? 1.0 : 0.7;
-        playFootstep(strength);
+        playFootstep(isRunning ? 1.0 : 0.7);
       }
     } else {
-      // reset so first step happens quickly when you start moving again
       stepTimer = Math.min(stepTimer, 0.08);
     }
   }
 
   function updateCamera(dt){
     const target = player.position.clone();
-    target.y = groundYSmoothed + LOOK_HEIGHT;
-
+    target.y = playerVisual.position.y + LOOK_HEIGHT;
+  
     controls.target.lerp(target, 1 - Math.pow(0.001, dt));
     controls.update();
   }
