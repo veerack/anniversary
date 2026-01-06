@@ -93,466 +93,542 @@
   }
   </script>
 
-  <script type="module">
-    import * as THREE from "three";
-    import { OrbitControls } from "three/addons/controls/OrbitControls.js";
-    import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
-    import { FBXLoader } from "three/addons/loaders/FBXLoader.js";
+<script type="module">
+  import * as THREE from "three";
+  import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+  import { FBXLoader } from "three/addons/loaders/FBXLoader.js";
 
-    // ====== EDIT THESE ======
-    const AVATAR_URL = "https://models.readyplayer.me/695c48e31c1817592c4ec48b.glb";
-    const ANIMS = {
-      Idle: "assets/anim/Idle.fbx",
-      Walk: "assets/anim/Walk.fbx",
-      Run:  "assets/anim/Run.fbx",
-      Jump: "assets/anim/Jump.fbx",
-    };
+  // ====== EDIT THESE ======
+  const AVATAR_URL = "https://models.readyplayer.me/695c48e31c1817592c4ec48b.glb";
+  const ANIMS = {
+    Idle: "assets/anim/Idle.fbx",
+    Walk: "assets/anim/Walk.fbx",
+    Run:  "assets/anim/Run.fbx",
+    Jump: "assets/anim/Jump.fbx",
+  };
 
-    const MEMORIES = [
-      { id:"first-meet", title:"How we met", text:"Write a short story here.", pos:new THREE.Vector3(-6,0,-4) },
-      { id:"first-date", title:"First date", text:"Where did you go? One detail you remember.", pos:new THREE.Vector3(6,0,-2) },
-      { id:"moment", title:"The moment I knew", text:"One moment that made it clear she’s your person.", pos:new THREE.Vector3(-2,0,7) },
-      { id:"future", title:"What’s next", text:"Something you’re excited to do together this year.", pos:new THREE.Vector3(7,0,7) },
-    ];
+  const MEMORIES = [
+    { id:"first-meet", title:"How we met", text:"Write a short story here.", pos:new THREE.Vector3(-6,0,-4) },
+    { id:"first-date", title:"First date", text:"Where did you go? One detail you remember.", pos:new THREE.Vector3(6,0,-2) },
+    { id:"moment", title:"The moment I knew", text:"One moment that made it clear she’s your person.", pos:new THREE.Vector3(-2,0,7) },
+    { id:"future", title:"What’s next", text:"Something you’re excited to do together this year.", pos:new THREE.Vector3(7,0,7) },
+  ];
 
-    // ====== Small utilities ======
-    function normalizeKey(name) {
-      // Normalize both RPM and Mixamo-ish strings into the same key.
-      // Examples:
-      // "mixamorigLeftHandMiddle3" -> "lefthandmiddle3"
-      // "LeftHandMiddle3"          -> "lefthandmiddle3"
-      return String(name || "")
-        .replace(/^Armature\|/i, "")
-        .replace(/^mixamorig/i, "")
-        .replace(/[^a-z0-9]/gi, "")
-        .toLowerCase();
-    }
+  // ====== Tuning ======
+  const WALK_SPEED = 2.6;   // slower
+  const RUN_SPEED  = 4.4;   // comfy run
+  const AIR_CONTROL = 0.65; // you can still steer a bit in air
 
-    function buildBoneKeyToNameMap(root) {
-      const map = new Map();
-      root.traverse((o) => {
-        if (!o.isBone) return;
-        const key = normalizeKey(o.name);
-        if (key && !map.has(key)) map.set(key, o.name);
-      });
-      return map;
-    }
+  const GRAVITY = -18.0;    // units/s^2
+  const JUMP_VEL = 6.4;     // units/s
 
-    function stripRootTranslation(clip) {
-      // Remove any position tracks for root/hips to prevent drifting.
-      const tracks = clip.tracks.filter((t) => {
-        const nm = t.name.toLowerCase();
-        if (!nm.endsWith(".position")) return true;
-        // Kill all root translations (safest for our manual movement)
-        return false;
-      });
-      return new THREE.AnimationClip(clip.name, clip.duration, tracks);
-    }
+  const CAM_HEIGHT = 1.85;
+  const CAM_DIST   = 3.8;   // close behind
+  const CAM_SIDE   = 0.0;
+  const CAM_LERP   = 0.16;  // smoothing
+  const LOOK_HEIGHT = 1.45;
 
-    function remapClipToAvatarBones(clip, avatarRoot, debugLabel) {
-      const boneMap = buildBoneKeyToNameMap(avatarRoot);
+  // If Run clip maps fewer than this number of tracks, it’s basically broken -> fallback to Walk.
+  const MIN_TRACKS_FOR_RUN = 40;
 
-      const outTracks = [];
-      let mapped = 0, skipped = 0;
+  // ====== Small utilities ======
+  function normalizeKey(name) {
+    return String(name || "")
+      .replace(/^Armature\|/i, "")
+      .replace(/^mixamorig/i, "")
+      .replace(/[^a-z0-9]/gi, "")
+      .toLowerCase();
+  }
 
-      for (const tr of clip.tracks) {
-        const parts = tr.name.split(".");
-        if (parts.length < 2) { skipped++; continue; }
+  function buildBoneKeyToNameMap(root) {
+    const map = new Map();
+    root.traverse((o) => {
+      if (!o.isBone) return;
+      const key = normalizeKey(o.name);
+      if (key && !map.has(key)) map.set(key, o.name);
+    });
+    return map;
+  }
 
-        const srcNode = parts[0];
-        const prop = parts.slice(1).join("."); // "quaternion" or "position" etc.
-        const key = normalizeKey(srcNode);
-        const dstBoneName = boneMap.get(key);
+  function stripRootTranslation(clip) {
+    // Remove ALL position tracks so animations are fully "in-place" (we move manually).
+    const tracks = clip.tracks.filter((t) => !t.name.toLowerCase().endsWith(".position"));
+    return new THREE.AnimationClip(clip.name, clip.duration, tracks);
+  }
 
-        if (!dstBoneName) { skipped++; continue; }
+  function remapClipToAvatarBones(clip, avatarRoot, debugLabel) {
+    const boneMap = buildBoneKeyToNameMap(avatarRoot);
+    const outTracks = [];
 
-        // We already removed all .position tracks, so mainly quaternion tracks remain.
-        const dstTrackName = `${dstBoneName}.${prop}`;
+    let mapped = 0;
 
-        const times = tr.times.slice();
-        const values = tr.values.slice();
+    for (const tr of clip.tracks) {
+      const parts = tr.name.split(".");
+      if (parts.length < 2) continue;
 
-        if (tr.ValueTypeName === "quaternion") {
-          outTracks.push(new THREE.QuaternionKeyframeTrack(dstTrackName, times, values));
-          mapped++;
-        } else if (tr.ValueTypeName === "vector") {
-          outTracks.push(new THREE.VectorKeyframeTrack(dstTrackName, times, values));
-          mapped++;
-        } else {
-          skipped++;
-        }
+      const srcNode = parts[0];
+      const prop = parts.slice(1).join(".");
+      const key = normalizeKey(srcNode);
+      const dstBoneName = boneMap.get(key);
+      if (!dstBoneName) continue;
+
+      const dstTrackName = `${dstBoneName}.${prop}`;
+      const times = tr.times.slice();
+      const values = tr.values.slice();
+
+      if (tr.ValueTypeName === "quaternion") {
+        outTracks.push(new THREE.QuaternionKeyframeTrack(dstTrackName, times, values));
+        mapped++;
+      } else if (tr.ValueTypeName === "vector") {
+        outTracks.push(new THREE.VectorKeyframeTrack(dstTrackName, times, values));
+        mapped++;
       }
-
-      // If we mapped basically nothing, this animation won’t work on this rig.
-      if (mapped < 10) {
-        console.warn(`[${debugLabel}] Too few mapped tracks (${mapped}). This FBX likely targets a different rig.`);
-      }
-
-      // Keep same duration/name
-      return new THREE.AnimationClip(clip.name || debugLabel, clip.duration, outTracks);
     }
 
-    function forceMeshVisible(root) {
-      root.traverse((o) => {
-        if (!o.isMesh) return;
-        o.frustumCulled = false;
-        o.visible = true;
-        o.castShadow = true;
-        o.receiveShadow = true;
+    const out = new THREE.AnimationClip(clip.name || debugLabel, clip.duration, outTracks);
+    out.userData = { mappedTracks: mapped, label: debugLabel };
+    return out;
+  }
 
-        const mats = Array.isArray(o.material) ? o.material : [o.material];
-        for (const m of mats) {
-          if (!m) continue;
-          // Don’t kill transparency (hair/eyes), just stabilize depth.
-          m.depthWrite = true;
-          m.depthTest = true;
-          m.needsUpdate = true;
-        }
-      });
+  function forceMeshVisible(root) {
+    root.traverse((o) => {
+      if (!o.isMesh) return;
+      o.frustumCulled = false;
+      o.visible = true;
+      o.castShadow = true;
+      o.receiveShadow = true;
+
+      const mats = Array.isArray(o.material) ? o.material : [o.material];
+      for (const m of mats) {
+        if (!m) continue;
+        m.depthWrite = true;
+        m.depthTest = true;
+        m.needsUpdate = true;
+      }
+    });
+  }
+
+  // ====== Scene setup ======
+  const app = document.getElementById("app");
+  const scene = new THREE.Scene();
+  scene.fog = new THREE.Fog(0x05060a, 12, 70);
+
+  const camera = new THREE.PerspectiveCamera(65, window.innerWidth / window.innerHeight, 0.1, 250);
+  camera.position.set(0, 4, 6);
+
+  const renderer = new THREE.WebGLRenderer({ antialias:true });
+  renderer.setClearColor(0x05060a, 1);
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.shadowMap.enabled = true;
+  app.appendChild(renderer.domElement);
+
+  // Lights
+  scene.add(new THREE.HemisphereLight(0xaecbff, 0x1a1d2b, 0.95));
+  const dir = new THREE.DirectionalLight(0xffffff, 1.15);
+  dir.position.set(12, 18, 10);
+  dir.castShadow = true;
+  dir.shadow.mapSize.set(1024, 1024);
+  dir.shadow.camera.left = -30;
+  dir.shadow.camera.right = 30;
+  dir.shadow.camera.top = 30;
+  dir.shadow.camera.bottom = -30;
+  scene.add(dir);
+
+  // Procedural grass texture
+  function makeGrassTexture() {
+    const c = document.createElement("canvas");
+    c.width = 256; c.height = 256;
+    const g = c.getContext("2d");
+
+    g.fillStyle = "#0b1a10";
+    g.fillRect(0,0,c.width,c.height);
+
+    for (let i=0;i<5000;i++){
+      const x = (Math.random()*c.width)|0;
+      const y = (Math.random()*c.height)|0;
+      const v = 35 + (Math.random()*60)|0;
+      g.fillStyle = `rgb(${8},${v},${20})`;
+      g.fillRect(x,y,1,1);
     }
 
-    // ====== Scene setup ======
-    const app = document.getElementById("app");
-    const scene = new THREE.Scene();
-    scene.fog = new THREE.Fog(0x05060a, 12, 70);
-
-    const camera = new THREE.PerspectiveCamera(65, window.innerWidth / window.innerHeight, 0.1, 250);
-    camera.position.set(0, 10, 14);
-
-    const renderer = new THREE.WebGLRenderer({ antialias:true });
-    renderer.setClearColor(0x05060a, 1);
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    renderer.setSize(window.innerWidth, window.innerHeight);
-    renderer.shadowMap.enabled = true;
-    app.appendChild(renderer.domElement);
-
-    // Lights
-    scene.add(new THREE.HemisphereLight(0xaecbff, 0x1a1d2b, 0.95));
-    const dir = new THREE.DirectionalLight(0xffffff, 1.15);
-    dir.position.set(12, 18, 10);
-    dir.castShadow = true;
-    dir.shadow.mapSize.set(1024, 1024);
-    dir.shadow.camera.left = -30;
-    dir.shadow.camera.right = 30;
-    dir.shadow.camera.top = 30;
-    dir.shadow.camera.bottom = -30;
-    scene.add(dir);
-
-    // Procedural "grass" texture (no external files)
-    function makeGrassTexture() {
-      const c = document.createElement("canvas");
-      c.width = 256; c.height = 256;
-      const g = c.getContext("2d");
-
-      g.fillStyle = "#0b1a10";
-      g.fillRect(0,0,c.width,c.height);
-
-      for (let i=0;i<5000;i++){
-        const x = (Math.random()*c.width)|0;
-        const y = (Math.random()*c.height)|0;
-        const v = 35 + (Math.random()*60)|0;
-        g.fillStyle = `rgb(${8},${v},${20})`;
-        g.fillRect(x,y,1,1);
-      }
-
-      for (let i=0;i<200;i++){
-        const x = Math.random()*c.width;
-        const y = Math.random()*c.height;
-        const r = 2 + Math.random()*6;
-        g.globalAlpha = 0.08;
-        g.fillStyle = "#89ffb0";
-        g.beginPath();
-        g.arc(x,y,r,0,Math.PI*2);
-        g.fill();
-      }
-      g.globalAlpha = 1;
-
-      const tex = new THREE.CanvasTexture(c);
-      tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-      tex.repeat.set(8,8);
-      tex.anisotropy = Math.min(renderer.capabilities.getMaxAnisotropy(), 8);
-      tex.needsUpdate = true;
-      return tex;
+    for (let i=0;i<200;i++){
+      const x = Math.random()*c.width;
+      const y = Math.random()*c.height;
+      const r = 2 + Math.random()*6;
+      g.globalAlpha = 0.08;
+      g.fillStyle = "#89ffb0";
+      g.beginPath();
+      g.arc(x,y,r,0,Math.PI*2);
+      g.fill();
     }
+    g.globalAlpha = 1;
 
-    const ground = new THREE.Mesh(
-      new THREE.PlaneGeometry(60, 60),
-      new THREE.MeshStandardMaterial({
-        map: makeGrassTexture(),
-        color: 0xffffff,
-        roughness: 0.95,
-        metalness: 0
-      })
+    const tex = new THREE.CanvasTexture(c);
+    tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+    tex.repeat.set(8,8);
+    tex.anisotropy = Math.min(renderer.capabilities.getMaxAnisotropy(), 8);
+    tex.needsUpdate = true;
+    return tex;
+  }
+
+  const ground = new THREE.Mesh(
+    new THREE.PlaneGeometry(60, 60),
+    new THREE.MeshStandardMaterial({
+      map: makeGrassTexture(),
+      color: 0xffffff,
+      roughness: 0.95,
+      metalness: 0
+    })
+  );
+  ground.rotation.x = -Math.PI/2;
+  ground.receiveShadow = true;
+  scene.add(ground);
+
+  // Walls / boundaries
+  const wallMat = new THREE.MeshStandardMaterial({ color: 0x111634, roughness: 0.9 });
+  function wall(w,h,d,x,y,z){
+    const m = new THREE.Mesh(new THREE.BoxGeometry(w,h,d), wallMat);
+    m.position.set(x,y,z);
+    m.castShadow = true; m.receiveShadow = true;
+    scene.add(m);
+    return m;
+  }
+  wall(40, 2.5, 0.8, 0, 1.25, -20);
+  wall(40, 2.5, 0.8, 0, 1.25, 20);
+  wall(0.8, 2.5, 40, -20, 1.25, 0);
+  wall(0.8, 2.5, 40,  20, 1.25, 0);
+
+  // Props
+  const propMat = new THREE.MeshStandardMaterial({ color: 0x1a2250, roughness: 0.8 });
+  function pillar(x,z){
+    const p = new THREE.Mesh(new THREE.CylinderGeometry(0.6,0.8,3.2,18), propMat);
+    p.position.set(x,1.6,z);
+    p.castShadow = true; p.receiveShadow = true;
+    scene.add(p);
+  }
+  pillar(-10,10); pillar(10,-10); pillar(0,0);
+
+  // Player container
+  const player = new THREE.Group();
+  player.position.set(0,0,8);
+  scene.add(player);
+
+  // ====== Mouse-drag heading (keeps camera locked behind) ======
+  let yaw = Math.PI; // facing "toward camera" initially; you can change if you want
+  let dragging = false;
+  let lastX = 0;
+
+  renderer.domElement.addEventListener("pointerdown", (e) => {
+    dragging = true;
+    lastX = e.clientX;
+    renderer.domElement.setPointerCapture(e.pointerId);
+  });
+  renderer.domElement.addEventListener("pointerup", (e) => {
+    dragging = false;
+    try { renderer.domElement.releasePointerCapture(e.pointerId); } catch {}
+  });
+  renderer.domElement.addEventListener("pointermove", (e) => {
+    if (!dragging) return;
+    const dx = e.clientX - lastX;
+    lastX = e.clientX;
+    yaw -= dx * 0.005; // sensitivity
+  });
+
+  // ====== Memory spots ======
+  const spots = [];
+  const spotGeo = new THREE.TorusGeometry(1.0, 0.12, 16, 50);
+  const glowMat = new THREE.MeshStandardMaterial({
+    color: 0x7da6ff,
+    emissive: 0x3b66ff,
+    emissiveIntensity: 1.6,
+    roughness: 0.2,
+    metalness: 0.25
+  });
+
+  for (const mem of MEMORIES) {
+    const ring = new THREE.Mesh(spotGeo, glowMat.clone());
+    ring.rotation.x = Math.PI / 2;
+    ring.position.copy(mem.pos);
+    ring.position.y = 0.12;
+    ring.receiveShadow = true;
+    scene.add(ring);
+
+    const marker = new THREE.Mesh(
+      new THREE.SphereGeometry(0.18, 18, 18),
+      new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0x7da6ff, emissiveIntensity: 1.2 })
     );
-    ground.rotation.x = -Math.PI/2;
-    ground.receiveShadow = true;
-    scene.add(ground);
+    marker.position.copy(mem.pos);
+    marker.position.y = 1.35;
+    marker.castShadow = true;
+    scene.add(marker);
 
-    // Walls / boundaries
-    const wallMat = new THREE.MeshStandardMaterial({ color: 0x111634, roughness: 0.9 });
-    function wall(w,h,d,x,y,z){
-      const m = new THREE.Mesh(new THREE.BoxGeometry(w,h,d), wallMat);
-      m.position.set(x,y,z);
-      m.castShadow = true; m.receiveShadow = true;
-      scene.add(m);
-      return m;
-    }
-    wall(40, 2.5, 0.8, 0, 1.25, -20);
-    wall(40, 2.5, 0.8, 0, 1.25, 20);
-    wall(0.8, 2.5, 40, -20, 1.25, 0);
-    wall(0.8, 2.5, 40,  20, 1.25, 0);
+    spots.push({ mem, ring, marker });
+  }
 
-    // Props
-    const propMat = new THREE.MeshStandardMaterial({ color: 0x1a2250, roughness: 0.8 });
-    function pillar(x,z){
-      const p = new THREE.Mesh(new THREE.CylinderGeometry(0.6,0.8,3.2,18), propMat);
-      p.position.set(x,1.6,z);
-      p.castShadow = true; p.receiveShadow = true;
-      scene.add(p);
-    }
-    pillar(-10,10); pillar(10,-10); pillar(0,0);
+  // UI
+  const panel = document.getElementById("panel");
+  const panelTitle = document.getElementById("panelTitle");
+  const panelText = document.getElementById("panelText");
+  document.getElementById("closeBtn").onclick = () => { panel.style.display = "none"; activeSpotId = null; };
 
-    // Player container
-    const player = new THREE.Group();
-    player.position.set(0,0,8);
-    scene.add(player);
+  let activeSpotId = null;
+  function openMemory(mem){
+    activeSpotId = mem.id;
+    panelTitle.textContent = mem.title;
+    panelText.textContent = mem.text;
+    panel.style.display = "block";
+  }
 
-    // Camera controls
-    const controls = new OrbitControls(camera, renderer.domElement);
-    controls.enableDamping = true;
-    controls.enablePan = false;
-    controls.minDistance = 6;
-    controls.maxDistance = 24;
-    controls.maxPolarAngle = Math.PI * 0.49;
-    controls.target.copy(player.position).add(new THREE.Vector3(0, 1.2, 0));
+  // ====== Avatar + Animations ======
+  const gltfLoader = new GLTFLoader();
+  const fbxLoader  = new FBXLoader();
 
-    // Memory spots
-    const spots = [];
-    const spotGeo = new THREE.TorusGeometry(1.0, 0.12, 16, 50);
-    const glowMat = new THREE.MeshStandardMaterial({
-      color: 0x7da6ff,
-      emissive: 0x3b66ff,
-      emissiveIntensity: 1.6,
-      roughness: 0.2,
-      metalness: 0.25
+  let avatarRoot = null;
+  let mixer = null;
+  const actions = {};
+  let currentAction = null;
+
+  function playAction(name, fade=0.14){
+    const next = actions[name];
+    if (!next) return;
+    if (currentAction === next) return;
+
+    if (currentAction) currentAction.fadeOut(fade);
+    currentAction = next;
+    currentAction.reset().fadeIn(fade).play();
+  }
+
+  function loadFBX(url){
+    return new Promise((resolve, reject) => {
+      fbxLoader.load(url, (fbx) => {
+        const clip = fbx.animations && fbx.animations[0];
+        if (!clip) return reject(new Error("No animation in " + url));
+        resolve(clip);
+      }, undefined, reject);
+    });
+  }
+
+  async function setupAvatarAndAnims(){
+    const gltf = await new Promise((resolve, reject) => {
+      gltfLoader.load(AVATAR_URL, resolve, undefined, reject);
     });
 
-    for (const mem of MEMORIES) {
-      const ring = new THREE.Mesh(spotGeo, glowMat.clone());
-      ring.rotation.x = Math.PI / 2;
-      ring.position.copy(mem.pos);
-      ring.position.y = 0.12;
-      ring.receiveShadow = true;
-      scene.add(ring);
+    avatarRoot = gltf.scene;
+    forceMeshVisible(avatarRoot);
 
-      const marker = new THREE.Mesh(
-        new THREE.SphereGeometry(0.18, 18, 18),
-        new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0x7da6ff, emissiveIntensity: 1.2 })
-      );
-      marker.position.copy(mem.pos);
-      marker.position.y = 1.35;
-      marker.castShadow = true;
-      scene.add(marker);
+    avatarRoot.position.set(0,0,0);
+    avatarRoot.rotation.set(0,0,0);
+    avatarRoot.scale.set(1,1,1);
+    player.add(avatarRoot);
 
-      spots.push({ mem, ring, marker });
+    mixer = new THREE.AnimationMixer(avatarRoot);
+
+    const [idleRaw, walkRaw, runRaw, jumpRaw] = await Promise.all([
+      loadFBX(ANIMS.Idle),
+      loadFBX(ANIMS.Walk),
+      loadFBX(ANIMS.Run),
+      loadFBX(ANIMS.Jump),
+    ]);
+
+    const idle = remapClipToAvatarBones(stripRootTranslation(idleRaw), avatarRoot, "Idle");
+    const walk = remapClipToAvatarBones(stripRootTranslation(walkRaw), avatarRoot, "Walk");
+    const run  = remapClipToAvatarBones(stripRootTranslation(runRaw),  avatarRoot, "Run");
+    const jump = remapClipToAvatarBones(stripRootTranslation(jumpRaw), avatarRoot, "Jump");
+
+    actions.Idle = mixer.clipAction(idle);
+    actions.Walk = mixer.clipAction(walk);
+    actions.Jump = mixer.clipAction(jump);
+
+    // --- Run: protect against T-pose ---
+    if ((run.tracks?.length || 0) < MIN_TRACKS_FOR_RUN) {
+      // fallback: reuse walk action as "run" with faster timeScale
+      console.warn("Run clip mapped too few tracks -> falling back to Walk for Run.");
+      actions.Run = mixer.clipAction(walk);
+      actions.Run.setEffectiveTimeScale(1.35);
+    } else {
+      actions.Run = mixer.clipAction(run);
+      actions.Run.setEffectiveTimeScale(1.08);
     }
 
-    // UI
-    const panel = document.getElementById("panel");
-    const panelTitle = document.getElementById("panelTitle");
-    const panelText = document.getElementById("panelText");
-    document.getElementById("closeBtn").onclick = () => { panel.style.display = "none"; activeSpotId = null; };
+    actions.Walk.setEffectiveTimeScale(1.0);
+    actions.Idle.setEffectiveTimeScale(1.0);
 
-    let activeSpotId = null;
-    function openMemory(mem){
-      activeSpotId = mem.id;
-      panelTitle.textContent = mem.title;
-      panelText.textContent = mem.text;
-      panel.style.display = "block";
-    }
+    actions.Jump.loop = THREE.LoopOnce;
+    actions.Jump.clampWhenFinished = true;
 
-    // ====== Avatar + Animations (WORKING METHOD) ======
-    const gltfLoader = new GLTFLoader();
-    const fbxLoader  = new FBXLoader();
-
-    let avatarRoot = null;
-    let mixer = null;
-    const actions = {};
-    let currentAction = null;
-
-    function playAction(name, fade=0.18){
-      const next = actions[name];
-      if (!next) return;
-      if (currentAction === next) return;
-
-      if (currentAction) currentAction.fadeOut(fade);
-      currentAction = next;
-      currentAction.reset().fadeIn(fade).play();
-    }
-
-    function loadFBX(url){
-      return new Promise((resolve, reject) => {
-        fbxLoader.load(url, (fbx) => {
-          const clip = fbx.animations && fbx.animations[0];
-          if (!clip) return reject(new Error("No animation in " + url));
-          resolve(clip);
-        }, undefined, reject);
+    // When jump animation finishes, we can exit jump state IF we already landed.
+    if (mixer) {
+      mixer.addEventListener("finished", (e) => {
+        if (e.action === actions.Jump) jumpAnimDone = true;
       });
     }
 
-    async function setupAvatarAndAnims(){
-      const gltf = await new Promise((resolve, reject) => {
-        gltfLoader.load(AVATAR_URL, resolve, undefined, reject);
-      });
+    console.log("Animations ready:", Object.keys(actions));
+    playAction("Idle", 0.0);
+  }
 
-      avatarRoot = gltf.scene;
-      forceMeshVisible(avatarRoot);
+  setupAvatarAndAnims().catch((e) => console.error("Avatar/anims failed:", e));
 
-      // Make sure it’s actually on the ground
-      avatarRoot.position.set(0,0,0);
-      avatarRoot.rotation.set(0,0,0);
-      avatarRoot.scale.set(1,1,1);
+  // ====== Movement + Jump physics ======
+  const keys = new Set();
+  window.addEventListener("keydown", (e) => keys.add(e.key.toLowerCase()));
+  window.addEventListener("keyup", (e) => keys.delete(e.key.toLowerCase()));
 
-      player.add(avatarRoot);
+  const clock = new THREE.Clock();
+  const tmpVec = new THREE.Vector3();
 
-      mixer = new THREE.AnimationMixer(avatarRoot);
+  function clampToMap(pos) {
+    pos.x = Math.max(-18.5, Math.min(18.5, pos.x));
+    pos.z = Math.max(-18.5, Math.min(18.5, pos.z));
+  }
 
-      const [idleRaw, walkRaw, runRaw, jumpRaw] = await Promise.all([
-        loadFBX(ANIMS.Idle),
-        loadFBX(ANIMS.Walk),
-        loadFBX(ANIMS.Run),
-        loadFBX(ANIMS.Jump),
-      ]);
+  let isJumping = false;
+  let yVel = 0;
+  let jumpAnimDone = false;
 
-      const idle = remapClipToAvatarBones(stripRootTranslation(idleRaw), avatarRoot, "Idle");
-      const walk = remapClipToAvatarBones(stripRootTranslation(walkRaw), avatarRoot, "Walk");
-      const run  = remapClipToAvatarBones(stripRootTranslation(runRaw),  avatarRoot, "Run");
-      const jump = remapClipToAvatarBones(stripRootTranslation(jumpRaw), avatarRoot, "Jump");
+  function startJump() {
+    if (isJumping) return;
+    isJumping = true;
+    jumpAnimDone = false;
+    yVel = JUMP_VEL;
+    playAction("Jump", 0.06);
+  }
 
-      actions.Idle = mixer.clipAction(idle);
-      actions.Walk = mixer.clipAction(walk);
-      actions.Run  = mixer.clipAction(run);
-      actions.Jump = mixer.clipAction(jump);
-
-      actions.Jump.loop = THREE.LoopOnce;
-      actions.Jump.clampWhenFinished = true;
-
-      console.log("Animations ready:", Object.keys(actions));
-      playAction("Idle", 0.0);
+  function updatePlayer(dt){
+    // Jump input
+    if ((keys.has(" ") || keys.has("spacebar")) && !isJumping) {
+      startJump();
     }
 
-    setupAvatarAndAnims().catch((e) => console.error("Avatar/anims failed:", e));
+    const isRunning = keys.has("shift");
+    const speed = isRunning ? RUN_SPEED : WALK_SPEED;
 
-    // ====== Movement + animation switching ======
-    const keys = new Set();
-    let isJumping = false;
-    let jumpCooldown = 0;
+    let forward = 0, right = 0;
+    if (keys.has("w")) forward += 1;
+    if (keys.has("s")) forward -= 1;
+    if (keys.has("d")) right += 1;
+    if (keys.has("a")) right -= 1;
 
-    window.addEventListener("keydown", (e) => {
-      const k = e.key.toLowerCase();
-      keys.add(k);
+    // Build basis from yaw
+    const dirF = new THREE.Vector3(Math.sin(yaw), 0, Math.cos(yaw)).normalize(); // forward
+    const dirR = new THREE.Vector3(dirF.z, 0, -dirF.x).normalize();             // right
 
-      if ((k === " " || k === "spacebar") && !isJumping && jumpCooldown <= 0) {
-        isJumping = true;
-        jumpCooldown = 0.65;
-        playAction("Jump", 0.06);
-      }
-    });
-    window.addEventListener("keyup", (e) => keys.delete(e.key.toLowerCase()));
+    tmpVec.set(0,0,0);
+    tmpVec.addScaledVector(dirF, forward);
+    tmpVec.addScaledVector(dirR, right);
 
-    const clock = new THREE.Clock();
-    const tmpVec = new THREE.Vector3();
+    const isMoving = tmpVec.lengthSq() > 0;
 
-    function clampToMap(pos) {
-      pos.x = Math.max(-18.5, Math.min(18.5, pos.x));
-      pos.z = Math.max(-18.5, Math.min(18.5, pos.z));
+    // If moving and NOT dragging mouse, rotate toward movement direction.
+    if (isMoving && !dragging) {
+      const mv = tmpVec.clone().normalize();
+      const targetYaw = Math.atan2(mv.x, mv.z);
+      // smooth turn
+      let d = targetYaw - yaw;
+      d = Math.atan2(Math.sin(d), Math.cos(d));
+      yaw += d * Math.min(1, dt * 10);
     }
 
-    function updatePlayer(dt){
-      const isRunning = keys.has("shift");
-      const speed = isRunning ? 6.2 : 4.2;
+    // Apply horizontal movement
+    if (isMoving) {
+      const control = isJumping ? AIR_CONTROL : 1.0;
+      tmpVec.normalize().multiplyScalar(speed * control * dt);
+      player.position.add(tmpVec);
+      clampToMap(player.position);
+    }
 
-      let forward = 0, right = 0;
-      if (keys.has("w")) forward += 1;
-      if (keys.has("s")) forward -= 1;
-      if (keys.has("d")) right += 1;
-      if (keys.has("a")) right -= 1;
+    // Apply jump physics
+    if (isJumping) {
+      yVel += GRAVITY * dt;
+      player.position.y += yVel * dt;
 
-      const yaw = controls.getAzimuthalAngle();
+      // Land
+      if (player.position.y <= 0) {
+        player.position.y = 0;
+        yVel = 0;
 
-      // ✅ Correct directions: W forward, S backward relative to camera yaw
-      const dirF = new THREE.Vector3(-Math.sin(yaw), 0, -Math.cos(yaw)).normalize();
-      const dirR = new THREE.Vector3(dirF.z, 0, -dirF.x).normalize();
-
-      tmpVec.set(0,0,0);
-      tmpVec.addScaledVector(dirF, forward);
-      tmpVec.addScaledVector(dirR, right);
-
-      const isMoving = tmpVec.lengthSq() > 0;
-
-      if (isMoving && !isJumping) {
-        tmpVec.normalize().multiplyScalar(speed * dt);
-        player.position.add(tmpVec);
-        clampToMap(player.position);
-
-        const look = player.position.clone().add(tmpVec.clone().normalize());
-        player.lookAt(look.x, player.position.y, look.z);
-      }
-
-      controls.target.copy(player.position).add(new THREE.Vector3(0, 1.2, 0));
-
-      if (actions.Idle) {
-        if (isJumping) playAction("Jump");
-        else if (isMoving && isRunning) playAction("Run");
-        else if (isMoving) playAction("Walk");
-        else playAction("Idle");
+        // Only exit jump when animation ended OR we’ve been in jump long enough.
+        // (If your Jump FBX is short, this avoids snapping too soon.)
+        if (jumpAnimDone) {
+          isJumping = false;
+        }
       }
     }
 
-    function checkMemoryTriggers(){
-      let closest = null;
-      let closestDist = Infinity;
+    // Character rotation follows yaw
+    player.rotation.y = yaw;
 
-      for (const s of spots) {
-        const d = player.position.distanceTo(s.mem.pos);
-        if (d < closestDist) { closestDist = d; closest = s; }
-      }
-
-      if (closest && closestDist <= 2.1) {
-        if (activeSpotId !== closest.mem.id) openMemory(closest.mem);
+    // Animation switching
+    if (actions.Idle) {
+      if (isJumping) {
+        playAction("Jump", 0.05);
+      } else if (isMoving && isRunning) {
+        playAction("Run", 0.12);
+      } else if (isMoving) {
+        playAction("Walk", 0.14);
+      } else {
+        playAction("Idle", 0.18);
       }
     }
+  }
 
-    function animate(){
-      requestAnimationFrame(animate);
-      const dt = Math.min(clock.getDelta(), 0.033);
+  function updateCamera(){
+    // Behind player based on yaw
+    const fwd = new THREE.Vector3(Math.sin(yaw), 0, Math.cos(yaw)).normalize();
+    const right = new THREE.Vector3(fwd.z, 0, -fwd.x).normalize();
 
-      updatePlayer(dt);
+    const desired = player.position.clone()
+      .addScaledVector(fwd, -CAM_DIST)
+      .addScaledVector(right, CAM_SIDE);
+    desired.y += CAM_HEIGHT;
 
-      if (jumpCooldown > 0) {
-        jumpCooldown -= dt;
-        if (jumpCooldown <= 0) isJumping = false;
-      }
+    camera.position.lerp(desired, CAM_LERP);
 
-      const t = clock.elapsedTime;
-      for (const s of spots) {
-        s.ring.rotation.z = t * 0.7;
-        s.marker.position.y = 1.35 + Math.sin(t * 2.2 + s.mem.pos.x) * 0.08;
-      }
+    const lookAt = player.position.clone();
+    lookAt.y += LOOK_HEIGHT;
+    camera.lookAt(lookAt);
+  }
 
-      if (mixer) mixer.update(dt);
+  function checkMemoryTriggers(){
+    let closest = null;
+    let closestDist = Infinity;
 
-      checkMemoryTriggers();
-      controls.update();
-      renderer.render(scene, camera);
+    for (const s of spots) {
+      const d = player.position.distanceTo(s.mem.pos);
+      if (d < closestDist) { closestDist = d; closest = s; }
     }
-    animate();
 
-    window.addEventListener("resize", () => {
-      camera.aspect = window.innerWidth / window.innerHeight;
-      camera.updateProjectionMatrix();
-      renderer.setSize(window.innerWidth, window.innerHeight);
-    });
-  </script>
+    if (closest && closestDist <= 2.1) {
+      if (activeSpotId !== closest.mem.id) openMemory(closest.mem);
+    }
+  }
+
+  function animate(){
+    requestAnimationFrame(animate);
+    const dt = Math.min(clock.getDelta(), 0.033);
+
+    updatePlayer(dt);
+    updateCamera();
+
+    const t = clock.elapsedTime;
+    for (const s of spots) {
+      s.ring.rotation.z = t * 0.7;
+      s.marker.position.y = 1.35 + Math.sin(t * 2.2 + s.mem.pos.x) * 0.08;
+    }
+
+    if (mixer) mixer.update(dt);
+
+    checkMemoryTriggers();
+    renderer.render(scene, camera);
+  }
+  animate();
+
+  window.addEventListener("resize", () => {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+  });
+</script>
 </body>
 </html>
