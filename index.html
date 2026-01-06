@@ -548,9 +548,16 @@
   });
   
   const ground = new THREE.Mesh(terrainGeo, terrainMat);
-  ground.receiveShadow = true;
   scene.add(ground);
 
+  renderer.shadowMap.enabled = false;
+  sunLight.castShadow = false;
+  ground.receiveShadow = false;
+  // also stop your meshes from casting/receiving:
+  scene.traverse(o => {
+    if (o.isMesh) { o.castShadow = false; o.receiveShadow = false; }
+  });
+  
   function placeOnTerrain(obj, x, z, yOffset = 0) {
     obj.position.set(x, terrainHeight(x, z) + yOffset, z);
   }
