@@ -236,6 +236,7 @@
   // ====== Scene setup ======
   const app = document.getElementById("app");
   const scene = new THREE.Scene();
+  scene.environment = null;
 
   // renderer (better lighting + reflections)
   const renderer = new THREE.WebGLRenderer({ antialias:true });
@@ -245,7 +246,7 @@
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   renderer.physicallyCorrectLights = true;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 0.42; // was ~0.88 → too bright
+  renderer.toneMappingExposure = 0.55; // was ~0.88 → too bright
   renderer.outputColorSpace = THREE.SRGBColorSpace;
 
   app.appendChild(renderer.domElement);
@@ -268,10 +269,10 @@
   sunLight.castShadow = true;
   
   sunLight.shadow.mapSize.set(4096, 4096);
-  sunLight.shadow.camera.near = 0.5;
-  sunLight.shadow.camera.far = 140;
   
-  const SHADOW_BOX = 35; // bigger = shadows cover more area
+  const SHADOW_BOX = 70;
+  sunLight.shadow.camera.far = 220;
+  sunLight.shadow.camera.near = 1;
   sunLight.shadow.camera.left   = -SHADOW_BOX;
   sunLight.shadow.camera.right  =  SHADOW_BOX;
   sunLight.shadow.camera.top    =  SHADOW_BOX;
@@ -282,8 +283,15 @@
   
   scene.add(sunLight);
 
+  const sunTarget = new THREE.Object3D();
+  scene.add(sunTarget);
+  sunLight.target = sunTarget;
+
   const moonLight = new THREE.DirectionalLight(0xbfd6ff, 0.35);
   scene.add(moonLight);
+
+  const hemi = new THREE.HemisphereLight(0xbfdcff, 0x0b1218, 0.55);
+  scene.add(hemi);
   
   scene.add(new THREE.AmbientLight(0xffffff, 0.015));
 
@@ -296,15 +304,11 @@
   let envRefreshTimer = 3.0;
 
   function updateSunForShadows(){
-    // Keep the light "centered" around the player so shadows don't cut off.
-    const sunDir = new THREE.Vector3(0.6, 1.0, 0.35).normalize(); // fixed sun direction for now
+    const sunDir = new THREE.Vector3(0.6, 1.0, 0.35).normalize();
+    sunLight.position.copy(player.position).addScaledVector(sunDir, 120);
   
-    const lightPos = player.position.clone().addScaledVector(sunDir, 80);
-    sunLight.position.copy(lightPos);
-  
-    // IMPORTANT: center shadow camera on player
-    sunLight.target.position.copy(player.position);
-    sunLight.shadow.camera.updateProjectionMatrix();
+    sunTarget.position.copy(player.position);
+    sunTarget.updateMatrixWorld();
   }
   
   function updateSkyAndEnv(dt){
@@ -616,8 +620,8 @@
   scatterScene();
 
   function makeGrassInstanced(count = 18000) {
-    const bladeGeo = new THREE.PlaneGeometry(0.08, 0.9, 1, 4);
-    bladeGeo.translate(0, 0.45, 0); // base at y=0
+  const bladeGeo = new THREE.PlaneGeometry(0.06, 0.45, 1, 2);
+  bladeGeo.translate(0, 0.225, 0);
   
     const bladeMat = new THREE.MeshStandardMaterial({
       color: 0x2f7a34,
@@ -629,10 +633,10 @@
   
     const inst = new THREE.InstancedMesh(bladeGeo, bladeMat, count);
     inst.castShadow = false;
-    inst.receiveShadow = true;
+    inst.receiveShadow = false;
   
     const dummy = new THREE.Object3D();
-    const seed = new Float32Array(count * 3);
+    const seed = new Float32Array(count * 4);
   
     for (let i = 0; i < count; i++) {
       const a = Math.random() * Math.PI * 2;
@@ -651,9 +655,10 @@
       inst.setMatrixAt(i, dummy.matrix);
   
       // store per-instance wind params (phase, strength, dir)
-      seed[i * 3 + 0] = Math.random() * 10;
-      seed[i * 3 + 1] = 0.2 + Math.random() * 0.6;
-      seed[i * 3 + 2] = (Math.random() - 0.5) * 0.8;
+      seed[i*4+0] = Math.random()*10;      // phase
+      seed[i*4+1] = 0.2 + Math.random()*0.6;// amp
+      seed[i*4+2] = (Math.random()-0.5)*0.8;// dir
+      seed[i*4+3] = dummy.rotation.y;       // yaw
     }
   
     inst.instanceMatrix.needsUpdate = true;
@@ -661,26 +666,31 @@
     return { inst, seed };
   }
   
-  const grass = makeGrassInstanced(16000);
+  const grass = makeGrassInstanced(7000);
   scene.add(grass.inst);
   
   function updateGrassWind(time) {
     const dummy = new THREE.Object3D();
-    for (let i = 0; i < grass.inst.count; i += 6) { 
-      // update only some per frame for perf (still looks good)
+  
+    for (let i = 0; i < grass.inst.count; i += 2) { // update half per frame instead of 1/6
       grass.inst.getMatrixAt(i, dummy.matrix);
       dummy.matrix.decompose(dummy.position, dummy.quaternion, dummy.scale);
   
-      const phase = grass.seed[i * 3 + 0];
-      const amp   = grass.seed[i * 3 + 1];
-      const dir   = grass.seed[i * 3 + 2];
+      const phase = grass.seed[i*4+0];
+      const amp   = grass.seed[i*4+1];
+      const dir   = grass.seed[i*4+2];
+      const yaw   = grass.seed[i*4+3];
   
-      dummy.rotation.z = Math.sin(time * 1.2 + phase) * 0.12 * amp;
-      dummy.rotation.x = Math.cos(time * 1.0 + phase) * 0.08 * amp * dir;
+      dummy.rotation.set(
+        Math.cos(time*1.0 + phase) * 0.08 * amp * dir, // x
+        yaw,                                           // y (preserved)
+        Math.sin(time*1.2 + phase) * 0.12 * amp         // z
+      );
   
       dummy.updateMatrix();
       grass.inst.setMatrixAt(i, dummy.matrix);
     }
+  
     grass.inst.instanceMatrix.needsUpdate = true;
   }
   
@@ -711,9 +721,6 @@
   const player = new THREE.Group();
   player.position.set(0,0,8);
   scene.add(player);
-
-  sunLight.target = player;       // IMPORTANT
-  scene.add(sunLight.target);     // make sure target is in scene
   
   // ====== Orbit camera locked to player ======
   const controls = new OrbitControls(camera, renderer.domElement);
@@ -855,14 +862,9 @@
     actions.Walk = mixer.clipAction(walk);
     actions.Jump = mixer.clipAction(jump);
 
-    let danceActive = null;
-
     mixer.addEventListener("finished", (e) => {
       if (e.action === actions.Jump) jumpAnimDone = true;
-    
-      if (danceActive && e.action === actions[danceActive]) {
-        danceActive = null; // return to locomotion
-      }
+      if (danceActive && e.action === actions[danceActive]) danceActive = null;
     });
     
     if ((run.tracks?.length || 0) < MIN_TRACKS_FOR_RUN) {
@@ -878,10 +880,6 @@
 
     actions.Jump.loop = THREE.LoopOnce;
     actions.Jump.clampWhenFinished = true;
-
-    mixer.addEventListener("finished", (e) => {
-      if (e.action === actions.Jump) jumpAnimDone = true;
-    });
 
     playAction("Idle", 0.0);
   }
@@ -988,6 +986,7 @@
   // ====== Movement + Jump physics ======
   const keys = new Set();
   let jumpRequested = false;
+  let danceActive = null;   // "Samba" | "Rumba" | "Salsa" | null
 
   window.addEventListener("keydown", (e) => {
     const k = e.key.toLowerCase();
@@ -1076,9 +1075,8 @@
     }
 
     if (isMoving && danceActive) {
-      // cancel dance immediately when player starts moving
       danceActive = null;
-      // fade out current action so locomotion can take over
+      // let locomotion take over immediately
       if (currentAction) currentAction.fadeOut(0.08);
     }
     
@@ -1100,15 +1098,14 @@
       player.position.y = terrainHeight(player.position.x, player.position.z);
     }
     
-    // animation switch
     if (actions.Idle) {
-      if (danceActive) {
-        playAction(danceActive, 0.06);
-      } else if (isJumping) playAction("Jump", 0.05);
+      if (danceActive) playAction(danceActive, 0.06);
+      else if (isJumping) playAction("Jump", 0.05);
       else if (isMoving && isRunning) playAction("Run", 0.12);
       else if (isMoving) playAction("Walk", 0.14);
       else playAction("Idle", 0.18);
     }
+    
     // footsteps
     if (!isJumping && isMoving) {
       const interval = isRunning ? STEP_INTERVAL_RUN : STEP_INTERVAL_WALK;
