@@ -284,9 +284,6 @@
 
   const moonLight = new THREE.DirectionalLight(0xbfd6ff, 0.35);
   scene.add(moonLight);
-
-  sunLight.intensity = 1.8 * dayFactor;  // was 2.6*
-  moonLight.intensity = 0.18 * (1 - dayFactor);
   
   scene.add(new THREE.AmbientLight(0xffffff, 0.015));
 
@@ -327,8 +324,8 @@
     moonLight.position.copy(sunPos).multiplyScalar(-120);
   
     const dayFactor = THREE.MathUtils.clamp((elevation + 6) / 18, 0, 1);
-    sunLight.intensity = 2.6 * dayFactor;
-    moonLight.intensity = 0.35 * (1 - dayFactor);
+    sunLight.intensity = 1.8 * dayFactor;  // was 2.6*
+    moonLight.intensity = 0.18 * (1 - dayFactor);
   
     // fog + background
     const dayFog = new THREE.Color(0xbad8ff);
