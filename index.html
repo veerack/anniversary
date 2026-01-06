@@ -1424,7 +1424,6 @@
   
     updateCamera(dt);
     sunSprite.position.copy(camera.position).addScaledVector(sunDir, 220);
-    updateClouds(dt, clock.elapsedTime);
     updateBirds(clock.elapsedTime, dt);
     shaderSky.mat.uniforms.uTime.value = clock.elapsedTime;
   
