@@ -975,6 +975,7 @@
   const keys = new Set();
   let jumpRequested = false;
   let danceActive = null;   // "Samba" | "Rumba" | "Salsa" | null
+  let groundYSmoothed = terrainHeight(player.position.x, player.position.z);
 
   window.addEventListener("keydown", (e) => {
     const k = e.key.toLowerCase();
@@ -1074,6 +1075,7 @@
       player.position.y += yVel * dt;
 
       const groundY = terrainHeight(player.position.x, player.position.z);
+      groundYSmoothed = groundY; // snap the smoothed baseline on landing
       
       if (player.position.y <= groundY) {
         player.position.y = groundY;
@@ -1083,7 +1085,9 @@
     }
 
     if (!isJumping) {
-      player.position.y = terrainHeight(player.position.x, player.position.z);
+      const gy = terrainHeight(player.position.x, player.position.z);
+      groundYSmoothed = THREE.MathUtils.lerp(groundYSmoothed, gy, 1 - Math.pow(0.001, dt));
+      player.position.y = groundYSmoothed;
     }
     
     if (actions.Idle) {
@@ -1112,7 +1116,7 @@
 
   function updateCamera(dt){
     const target = player.position.clone();
-    target.y += LOOK_HEIGHT;
+    target.y = groundYSmoothed + LOOK_HEIGHT;
 
     controls.target.lerp(target, 1 - Math.pow(0.001, dt));
     controls.update();
