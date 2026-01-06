@@ -95,6 +95,7 @@
 
 <script type="module">
   import * as THREE from "three";
+  import { OrbitControls } from "three/addons/controls/OrbitControls.js";
   import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
   import { FBXLoader } from "three/addons/loaders/FBXLoader.js";
 
@@ -314,27 +315,28 @@
   player.position.set(0,0,8);
   scene.add(player);
 
-  // ====== Mouse-drag heading (keeps camera locked behind) ======
-  let yaw = Math.PI; // facing "toward camera" initially; you can change if you want
-  let dragging = false;
-  let lastX = 0;
-
-  renderer.domElement.addEventListener("pointerdown", (e) => {
-    dragging = true;
-    lastX = e.clientX;
-    renderer.domElement.setPointerCapture(e.pointerId);
-  });
-  renderer.domElement.addEventListener("pointerup", (e) => {
-    dragging = false;
-    try { renderer.domElement.releasePointerCapture(e.pointerId); } catch {}
-  });
-  renderer.domElement.addEventListener("pointermove", (e) => {
-    if (!dragging) return;
-    const dx = e.clientX - lastX;
-    lastX = e.clientX;
-    yaw -= dx * 0.005; // sensitivity
-  });
-
+  // ====== Orbit camera locked to player ======
+  const controls = new OrbitControls(camera, renderer.domElement);
+  controls.enableDamping = true;
+  controls.enablePan = false;
+  
+  // zoom with wheel
+  controls.enableZoom = true;
+  controls.zoomSpeed = 0.9;
+  
+  // keep it close + consistent
+  controls.minDistance = 2.6;
+  controls.maxDistance = 7.0;
+  
+  controls.minPolarAngle = 0.15;
+  controls.maxPolarAngle = Math.PI * 0.48;
+  
+  controls.rotateSpeed = 0.6;
+  
+  // initial target
+  controls.target.copy(player.position).add(new THREE.Vector3(0, LOOK_HEIGHT, 0));
+  controls.update();
+  
   // ====== Memory spots ======
   const spots = [];
   const spotGeo = new THREE.TorusGeometry(1.0, 0.12, 16, 50);
@@ -510,9 +512,13 @@
     if (keys.has("d")) right += 1;
     if (keys.has("a")) right -= 1;
 
-    // Build basis from yaw
-    const dirF = new THREE.Vector3(Math.sin(yaw), 0, Math.cos(yaw)).normalize(); // forward
-    const dirR = new THREE.Vector3(dirF.z, 0, -dirF.x).normalize();             // right
+    // Basis from camera direction (orbit-friendly)
+    const dirF = new THREE.Vector3();
+    camera.getWorldDirection(dirF);
+    dirF.y = 0;
+    dirF.normalize();
+    
+    const dirR = new THREE.Vector3().crossVectors(dirF, new THREE.Vector3(0,1,0)).normalize();
 
     tmpVec.set(0,0,0);
     tmpVec.addScaledVector(dirF, forward);
@@ -520,14 +526,14 @@
 
     const isMoving = tmpVec.lengthSq() > 0;
 
-    // If moving and NOT dragging mouse, rotate toward movement direction.
-    if (isMoving && !dragging) {
+    // Rotate character toward movement direction
+    if (isMoving) {
       const mv = tmpVec.clone().normalize();
       const targetYaw = Math.atan2(mv.x, mv.z);
-      // smooth turn
-      let d = targetYaw - yaw;
+    
+      let d = targetYaw - player.rotation.y;
       d = Math.atan2(Math.sin(d), Math.cos(d));
-      yaw += d * Math.min(1, dt * 10);
+      player.rotation.y += d * Math.min(1, dt * 10);
     }
 
     // Apply horizontal movement
@@ -556,9 +562,6 @@
       }
     }
 
-    // Character rotation follows yaw
-    player.rotation.y = yaw;
-
     // Animation switching
     if (actions.Idle) {
       if (isJumping) {
@@ -573,21 +576,13 @@
     }
   }
 
-  function updateCamera(){
-    // Behind player based on yaw
-    const fwd = new THREE.Vector3(Math.sin(yaw), 0, Math.cos(yaw)).normalize();
-    const right = new THREE.Vector3(fwd.z, 0, -fwd.x).normalize();
-
-    const desired = player.position.clone()
-      .addScaledVector(fwd, -CAM_DIST)
-      .addScaledVector(right, CAM_SIDE);
-    desired.y += CAM_HEIGHT;
-
-    camera.position.lerp(desired, CAM_LERP);
-
-    const lookAt = player.position.clone();
-    lookAt.y += LOOK_HEIGHT;
-    camera.lookAt(lookAt);
+  function updateCamera(dt){
+    const target = player.position.clone();
+    target.y += LOOK_HEIGHT;
+  
+    // smooth follow target (no camera drift)
+    controls.target.lerp(target, 1 - Math.pow(0.001, dt));
+    controls.update();
   }
 
   function checkMemoryTriggers(){
@@ -609,7 +604,7 @@
     const dt = Math.min(clock.getDelta(), 0.033);
 
     updatePlayer(dt);
-    updateCamera();
+    updateCamera(dt);
 
     const t = clock.elapsedTime;
     for (const s of spots) {
