@@ -304,64 +304,136 @@
 
   scene.add(new THREE.AmbientLight(0xffffff, 0.28));
 
-  // ====== Clouds ======
-  function makeCloudTexture() {
+  // ====== Better Clouds (FBM noise + multi-layer billboards) ======
+  function makeFBMCloudTexture(size=512) {
     const c = document.createElement("canvas");
-    c.width = 256; c.height = 128;
+    c.width = c.height = size;
     const g = c.getContext("2d");
-
-    g.clearRect(0,0,c.width,c.height);
-
-    for (let i=0;i<26;i++){
-      const x = Math.random()*c.width;
-      const y = 20 + Math.random()*70;
-      const r = 18 + Math.random()*40;
-
-      const grd = g.createRadialGradient(x,y, r*0.1, x,y, r);
-      grd.addColorStop(0, "rgba(255,255,255,0.35)");
-      grd.addColorStop(1, "rgba(255,255,255,0)");
-      g.fillStyle = grd;
-      g.beginPath();
-      g.arc(x,y,r,0,Math.PI*2);
-      g.fill();
+    const img = g.createImageData(size, size);
+  
+    function fract(x){ return x - Math.floor(x); }
+    function hash(x,y){
+      return fract(Math.sin(x*127.1 + y*311.7)*43758.5453);
     }
-
+    function noise(x,y){
+      const ix = Math.floor(x), iy = Math.floor(y);
+      const fx = x - ix, fy = y - iy;
+      const a = hash(ix,iy);
+      const b = hash(ix+1,iy);
+      const c = hash(ix,iy+1);
+      const d = hash(ix+1,iy+1);
+      const ux = fx*fx*(3.0-2.0*fx);
+      const uy = fy*fy*(3.0-2.0*fy);
+      return (a*(1-ux)+b*ux)*(1-uy) + (c*(1-ux)+d*ux)*uy;
+    }
+    function fbm(x,y){
+      let v = 0, a = 0.5;
+      for (let i=0;i<6;i++){
+        v += a * noise(x,y);
+        x *= 2.02; y *= 2.02;
+        a *= 0.5;
+      }
+      return v;
+    }
+  
+    for (let y=0;y<size;y++){
+      for (let x=0;x<size;x++){
+        const nx = x / size, ny = y / size;
+  
+        // FBM with shaping: concentrate “puffs”
+        let n = fbm(nx*4.0, ny*2.0);
+        n = Math.pow(n, 1.55);
+  
+        // soft edges vignette so each card looks cloud-like
+        const vx = (nx-0.5)*2.0;
+        const vy = (ny-0.5)*2.0;
+        const vign = Math.max(0.0, 1.0 - (vx*vx*0.9 + vy*vy*1.8));
+  
+        // alpha
+        const a = THREE.MathUtils.clamp((n*1.25 - 0.35) * vign, 0, 1);
+  
+        // slight internal lighting (bright center)
+        const light = 0.65 + 0.35 * vign;
+        const col = Math.floor(255 * light);
+  
+        const i = (y*size + x)*4;
+        img.data[i+0] = col;
+        img.data[i+1] = col;
+        img.data[i+2] = col;
+        img.data[i+3] = Math.floor(a * 255);
+      }
+    }
+  
+    g.putImageData(img, 0, 0);
+  
     const tex = new THREE.CanvasTexture(c);
     tex.colorSpace = THREE.SRGBColorSpace;
     tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
     tex.needsUpdate = true;
     return tex;
   }
-
+  
   const clouds = new THREE.Group();
   scene.add(clouds);
-
-  const cloudTex = makeCloudTexture();
-  const cloudMat = new THREE.MeshStandardMaterial({
+  
+  const cloudTex = makeFBMCloudTexture(512);
+  
+  const cloudMat = new THREE.MeshLambertMaterial({
     map: cloudTex,
     transparent: true,
-    opacity: 0.65,
     depthWrite: false,
-    roughness: 1.0,
-    metalness: 0.0,
+    opacity: 0.95
   });
-  cloudMat.alphaTest = 0.02;
-
-  for (let i=0;i<18;i++){
-    const w = 18 + Math.random()*22;
-    const h = w * (0.45 + Math.random()*0.2);
-    const m = new THREE.Mesh(new THREE.PlaneGeometry(w,h), cloudMat);
-    m.position.set((Math.random()-0.5)*140, 26 + Math.random()*18, (Math.random()-0.5)*140);
-    m.rotation.y = Math.random()*Math.PI*2;
-    m.renderOrder = 10;
-    clouds.add(m);
+  
+  // one cloud = several layers for fake volume
+  function addCloud(x,y,z,scale=1){
+    const layers = 5;
+    const group = new THREE.Group();
+    for (let i=0;i<layers;i++){
+      const w = (18 + Math.random()*18) * scale;
+      const h = w * (0.45 + Math.random()*0.25);
+  
+      const m = new THREE.Mesh(new THREE.PlaneGeometry(w,h), cloudMat);
+      m.position.set(
+        (Math.random()-0.5) * 2.2 * scale,
+        (Math.random()-0.5) * 1.2 * scale,
+        i * 0.65 * scale
+      );
+      m.rotation.y = Math.random() * Math.PI*2;
+      m.renderOrder = 10 + i;
+      group.add(m);
+    }
+    group.position.set(x,y,z);
+    group.userData = { speed: 0.25 + Math.random()*0.35, wob: Math.random()*10 };
+    clouds.add(group);
   }
-
-  function updateClouds(dt){
-    for (const m of clouds.children){
-      m.position.x += dt * 0.45;
-      if (m.position.x > 80) m.position.x = -80;
-      m.lookAt(camera.position.x, m.position.y, camera.position.z);
+  
+  // scatter clouds
+  for (let i=0;i<14;i++){
+    addCloud(
+      (Math.random()-0.5)*150,
+      28 + Math.random()*18,
+      (Math.random()-0.5)*150,
+      0.9 + Math.random()*1.2
+    );
+  }
+  
+  function updateClouds(dt, time){
+    for (const c of clouds.children){
+      c.position.x += dt * (c.userData.speed * 6.0);
+      c.position.z += dt * (c.userData.speed * 1.8);
+  
+      // gentle altitude wobble
+      c.position.y += Math.sin(time*0.25 + c.userData.wob) * dt * 0.15;
+  
+      // wrap
+      if (c.position.x > 95) c.position.x = -95;
+      if (c.position.z > 95) c.position.z = -95;
+  
+      // billboard each layer to camera
+      for (const layer of c.children){
+        layer.lookAt(camera.position.x, layer.getWorldPosition(new THREE.Vector3()).y, camera.position.z);
+      }
     }
   }
 
@@ -376,7 +448,7 @@
     g0.fillStyle = "#0b2411";
     g0.fillRect(0,0,size,size);
 
-    for (let i=0;i<22000;i++){
+    for (let i=0;i<14000;i++){
       const x = (Math.random()*size)|0;
       const y = (Math.random()*size)|0;
       const v = 50 + (Math.random()*90)|0;
@@ -386,7 +458,7 @@
     }
 
     g0.globalAlpha = 0.35;
-    for (let i=0;i<4500;i++){
+    for (let i=0;i<2800;i++){
       const x = Math.random()*size;
       const y = Math.random()*size;
       const len = 2 + Math.random()*6;
@@ -491,6 +563,20 @@
     envMapIntensity: 0.0
   });
 
+  terrainMat.onBeforeCompile = (shader) => {
+    shader.fragmentShader = shader.fragmentShader.replace(
+      "#include <dithering_fragment>",
+      `
+        // subtle height tint variation (breaks repetition)
+        float h = vViewPosition.y; // view space-ish but good enough
+        vec3 tint = mix(vec3(1.0, 1.0, 1.0), vec3(0.92, 1.03, 0.92), smoothstep(-2.0, 2.0, h));
+        gl_FragColor.rgb *= tint;
+        #include <dithering_fragment>
+      `
+    );
+  };
+  terrainMat.needsUpdate = true;
+  
   const ground = new THREE.Mesh(terrainGeo, terrainMat);
   ground.receiveShadow = true;
   scene.add(ground);
@@ -564,77 +650,173 @@
   }
   scatterScene();
 
-  // ====== Instanced grass ======
-  function makeGrassInstanced(count = 7000) {
-    const bladeGeo = new THREE.PlaneGeometry(0.06, 0.45, 1, 2);
-    bladeGeo.translate(0, 0.225, 0);
-
-    const bladeMat = new THREE.MeshStandardMaterial({
-      color: 0x2f7a34,
-      roughness: 1.0,
-      metalness: 0.0,
-      side: THREE.DoubleSide,
-      envMapIntensity: 0.0
-    });
-
-    const inst = new THREE.InstancedMesh(bladeGeo, bladeMat, count);
-    inst.castShadow = false;
-    inst.receiveShadow = false;
-
-    const dummy = new THREE.Object3D();
-    const seed = new Float32Array(count * 4);
-
+  // ====== Proper Grass (shader blades: wind + player interaction) ======
+  function makeGrassField({
+    count = 65000,
+    radius = MAP_RADIUS - 2,
+    bladeH = 0.65,
+    bladeW = 0.06
+  } = {}) {
+  
+    // A single blade: vertical plane subdivided so it can bend smoothly
+    const bladeGeo = new THREE.PlaneGeometry(bladeW, bladeH, 1, 4);
+    bladeGeo.translate(0, bladeH * 0.5, 0); // root at y=0
+  
+    // Instanced attributes
+    const offsets = new Float32Array(count * 3);
+    const scales  = new Float32Array(count);
+    const yaws    = new Float32Array(count);
+    const phases  = new Float32Array(count);
+  
     for (let i = 0; i < count; i++) {
       const a = Math.random() * Math.PI * 2;
-      const r = Math.sqrt(Math.random()) * (MAP_RADIUS - 2);
+      const r = Math.sqrt(Math.random()) * radius;
       const x = Math.cos(a) * r;
       const z = Math.sin(a) * r;
-
       const y = terrainHeight(x, z);
-      const s = 0.6 + Math.random() * 1.0;
-
-      dummy.position.set(x, y, z);
-      dummy.rotation.y = Math.random() * Math.PI * 2;
-      dummy.scale.set(s, s * (0.9 + Math.random() * 0.4), s);
-
-      dummy.updateMatrix();
-      inst.setMatrixAt(i, dummy.matrix);
-
-      seed[i*4+0] = Math.random()*10;
-      seed[i*4+1] = 0.2 + Math.random()*0.6;
-      seed[i*4+2] = (Math.random()-0.5)*0.8;
-      seed[i*4+3] = dummy.rotation.y;
+  
+      offsets[i*3+0] = x;
+      offsets[i*3+1] = y;
+      offsets[i*3+2] = z;
+  
+      scales[i] = 0.6 + Math.random() * 1.25;       // size variance
+      yaws[i]   = Math.random() * Math.PI * 2;      // random rotation
+      phases[i] = Math.random() * 10.0;             // wind phase
     }
-
-    inst.instanceMatrix.needsUpdate = true;
-    return { inst, seed };
+  
+    const instGeo = new THREE.InstancedBufferGeometry();
+    instGeo.index = bladeGeo.index;
+    instGeo.attributes.position = bladeGeo.attributes.position;
+    instGeo.attributes.uv = bladeGeo.attributes.uv;
+    instGeo.attributes.normal = bladeGeo.attributes.normal;
+  
+    instGeo.setAttribute("iOffset", new THREE.InstancedBufferAttribute(offsets, 3));
+    instGeo.setAttribute("iScale",  new THREE.InstancedBufferAttribute(scales, 1));
+    instGeo.setAttribute("iYaw",    new THREE.InstancedBufferAttribute(yaws, 1));
+    instGeo.setAttribute("iPhase",  new THREE.InstancedBufferAttribute(phases, 1));
+  
+    const mat = new THREE.ShaderMaterial({
+      transparent: true,
+      depthWrite: true,
+      side: THREE.DoubleSide,
+      uniforms: {
+        uTime: { value: 0 },
+        uPlayerPos: { value: new THREE.Vector3() },
+        uWindDir: { value: new THREE.Vector2(0.8, 0.2).normalize() },
+        uWindStrength: { value: 1.0 },
+        uInteractRadius: { value: 1.2 },   // how close to bend
+        uInteractStrength: { value: 0.65 } // bend intensity
+      },
+      vertexShader: `
+        precision highp float;
+  
+        attribute vec3 position;
+        attribute vec2 uv;
+        attribute vec3 normal;
+  
+        attribute vec3 iOffset;
+        attribute float iScale;
+        attribute float iYaw;
+        attribute float iPhase;
+  
+        uniform float uTime;
+        uniform vec3 uPlayerPos;
+        uniform vec2 uWindDir;
+        uniform float uWindStrength;
+        uniform float uInteractRadius;
+        uniform float uInteractStrength;
+  
+        varying vec2 vUv;
+        varying float vShade;
+  
+        mat2 rot(float a){
+          float s = sin(a), c = cos(a);
+          return mat2(c,-s,s,c);
+        }
+  
+        void main(){
+          vUv = uv;
+  
+          // Base blade
+          vec3 p = position;
+          p.y *= iScale;
+  
+          // rotate blade around Y
+          vec2 xz = rot(iYaw) * p.xz;
+          p.x = xz.x;
+          p.z = xz.y;
+  
+          // Wind: stronger towards tip (uv.y)
+          float tip = smoothstep(0.15, 1.0, uv.y);
+          float w = sin(uTime * 1.45 + iPhase) * 0.08
+                  + sin(uTime * 0.75 + iPhase * 1.7) * 0.05;
+  
+          vec2 wind = uWindDir * w * uWindStrength;
+          p.xz += wind * tip * (0.9 + 0.25 * iScale);
+  
+          // Player interaction: bend away from player within radius
+          vec3 worldRoot = iOffset;
+          vec2 toPlayer = (worldRoot.xz - uPlayerPos.xz);
+          float d = length(toPlayer);
+          float influence = 1.0 - smoothstep(0.0, uInteractRadius, d);
+          vec2 pushDir = (d > 0.0001) ? normalize(toPlayer) : vec2(0.0, 1.0);
+  
+          // push near tip more than base
+          p.xz += pushDir * (influence * uInteractStrength) * tip;
+  
+          // move into world
+          vec3 worldPos = p + iOffset;
+  
+          // simple shading factor: darker at base
+          vShade = 0.55 + 0.45 * uv.y;
+  
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(worldPos, 1.0);
+        }
+      `,
+      fragmentShader: `
+        precision highp float;
+        varying vec2 vUv;
+        varying float vShade;
+  
+        void main(){
+          // Soft blade alpha: thin tip, no hard rectangle
+          float edge = smoothstep(0.02, 0.18, vUv.x) * (1.0 - smoothstep(0.82, 0.98, vUv.x));
+          float tip  = smoothstep(1.0, 0.65, vUv.y); // fade near top slightly
+          float a = edge * (0.85 + 0.15 * tip);
+  
+          // color gradient base->tip (more realistic than single green)
+          vec3 base = vec3(0.06, 0.22, 0.08);
+          vec3 mid  = vec3(0.10, 0.40, 0.14);
+          vec3 top  = vec3(0.18, 0.55, 0.20);
+  
+          vec3 col = mix(base, mid, smoothstep(0.0, 0.65, vUv.y));
+          col = mix(col, top, smoothstep(0.55, 1.0, vUv.y));
+          col *= vShade;
+  
+          // discard near-zero alpha for performance
+          if (a < 0.03) discard;
+  
+          gl_FragColor = vec4(col, a);
+        }
+      `
+    });
+  
+    const mesh = new THREE.Mesh(instGeo, mat);
+    mesh.frustumCulled = false;
+    mesh.castShadow = false;
+    mesh.receiveShadow = false;
+  
+    return { mesh, mat };
   }
-
-  const grass = makeGrassInstanced(7000);
-  scene.add(grass.inst);
-
-  function updateGrassWind(time) {
-    const dummy = new THREE.Object3D();
-    for (let i = 0; i < grass.inst.count; i += 2) {
-      grass.inst.getMatrixAt(i, dummy.matrix);
-      dummy.matrix.decompose(dummy.position, dummy.quaternion, dummy.scale);
-
-      const phase = grass.seed[i*4+0];
-      const amp   = grass.seed[i*4+1];
-      const dir   = grass.seed[i*4+2];
-      const yaw   = grass.seed[i*4+3];
-
-      dummy.rotation.set(
-        Math.cos(time*1.0 + phase) * 0.08 * amp * dir,
-        yaw,
-        Math.sin(time*1.2 + phase) * 0.12 * amp
-      );
-
-      dummy.updateMatrix();
-      grass.inst.setMatrixAt(i, dummy.matrix);
-    }
-    grass.inst.instanceMatrix.needsUpdate = true;
-  }
+  
+  // create grass
+  const grassField = makeGrassField({
+    count: 90000,      // adjust performance
+    radius: MAP_RADIUS - 2,
+    bladeH: 0.72,
+    bladeW: 0.06
+  });
+  scene.add(grassField.mesh);
 
   // ====== Props ======
   const propMat = new THREE.MeshStandardMaterial({
@@ -841,35 +1023,99 @@
   let audioCtx = null;
   let master = null;
 
+  // ====== Audio (procedural wind + footsteps) ======
+  let audioCtx = null;
+  let master = null;
+  let windGain = null;
+  
   function ensureAudio(){
     if (audioCtx) return;
     audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  
     master = audioCtx.createGain();
     master.gain.value = 0.9;
     master.connect(audioCtx.destination);
+  
+    // --- Wind: looped noise -> bandpass -> lowpass ---
+    const bufferSize = (audioCtx.sampleRate * 2) | 0;
+    const noiseBuf = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
+    const data = noiseBuf.getChannelData(0);
+    for (let i=0;i<bufferSize;i++){
+      data[i] = (Math.random()*2-1) * 0.45;
+    }
+  
+    const windSrc = audioCtx.createBufferSource();
+    windSrc.buffer = noiseBuf;
+    windSrc.loop = true;
+  
+    const bp = audioCtx.createBiquadFilter();
+    bp.type = "bandpass";
+    bp.frequency.value = 380;
+    bp.Q.value = 0.8;
+  
+    const lp = audioCtx.createBiquadFilter();
+    lp.type = "lowpass";
+    lp.frequency.value = 1400;
+  
+    windGain = audioCtx.createGain();
+    windGain.gain.value = 0.06; // subtle base
+  
+    windSrc.connect(bp);
+    bp.connect(lp);
+    lp.connect(windGain);
+    windGain.connect(master);
+    windSrc.start();
   }
-
+  
+  function setWindStrength(v){ // 0..1
+    if (!windGain || !audioCtx) return;
+    // smooth
+    const t = audioCtx.currentTime;
+    const target = 0.03 + 0.12 * v;
+    windGain.gain.cancelScheduledValues(t);
+    windGain.gain.setTargetAtTime(target, t, 0.12);
+  }
+  
   function playFootstep(strength=1){
     if (!audioCtx) return;
     const t = audioCtx.currentTime;
-
+  
     const osc = audioCtx.createOscillator();
     osc.type = "sine";
     osc.frequency.setValueAtTime(120, t);
     osc.frequency.exponentialRampToValueAtTime(70, t + 0.08);
-
+  
     const g = audioCtx.createGain();
     g.gain.setValueAtTime(0.0001, t);
     g.gain.exponentialRampToValueAtTime(0.08 * strength, t + 0.01);
     g.gain.exponentialRampToValueAtTime(0.0001, t + 0.12);
-
-    osc.connect(g);
-    g.connect(master);
-
-    osc.start(t);
-    osc.stop(t + 0.14);
+  
+    // grit noise
+    const nSize = (audioCtx.sampleRate * 0.12)|0;
+    const nb = audioCtx.createBuffer(1, nSize, audioCtx.sampleRate);
+    const nd = nb.getChannelData(0);
+    for (let i=0;i<nSize;i++){
+      nd[i] = (Math.random()*2-1) * (1 - i/nSize);
+    }
+    const ns = audioCtx.createBufferSource();
+    ns.buffer = nb;
+  
+    const hp = audioCtx.createBiquadFilter();
+    hp.type = "highpass";
+    hp.frequency.value = 700;
+  
+    const ng = audioCtx.createGain();
+    ng.gain.setValueAtTime(0.0001, t);
+    ng.gain.exponentialRampToValueAtTime(0.05 * strength, t + 0.01);
+    ng.gain.exponentialRampToValueAtTime(0.0001, t + 0.09);
+  
+    osc.connect(g); g.connect(master);
+    ns.connect(hp); hp.connect(ng); ng.connect(master);
+  
+    osc.start(t); osc.stop(t + 0.14);
+    ns.start(t);  ns.stop(t + 0.12);
   }
-
+  
   window.addEventListener("pointerdown", async () => {
     ensureAudio();
     if (audioCtx && audioCtx.state !== "running") await audioCtx.resume();
@@ -1025,14 +1271,21 @@
     const dt = Math.min(clock.getDelta(), 0.033);
 
     updatePlayer(dt);
-    updateCamera(dt);
-    updateClouds(dt);
 
-    grassWindAccum += dt;
-    if (grassWindAccum >= 1/30) {
-      updateGrassWind(clock.elapsedTime);
-      grassWindAccum = 0;
-    }
+    const moving = keys.has("w") || keys.has("a") || keys.has("s") || keys.has("d");
+    const windBase = 0.45 + 0.35 * Math.sin(clock.elapsedTime * 0.15);
+    const windMove = moving ? 0.35 : 0.0;
+    setWindStrength(THREE.MathUtils.clamp(windBase + windMove, 0, 1));
+    
+    updateCamera(dt);
+    updateClouds(dt, clock.elapsedTime);
+
+    grassField.mat.uniforms.uTime.value = clock.elapsedTime;
+    grassField.mat.uniforms.uPlayerPos.value.copy(player.position);
+    
+    // stronger wind when moving
+    const moving = keys.has("w") || keys.has("a") || keys.has("s") || keys.has("d");
+    grassField.mat.uniforms.uWindStrength.value = moving ? 1.15 : 0.85;
 
     const t = clock.elapsedTime;
     for (const s of spots) {
