@@ -533,18 +533,6 @@
   scene.add(hemi);
 
   scene.add(new THREE.AmbientLight(0xffffff, 0.28));
-  
-  const clouds = new THREE.Group();
-  scene.add(clouds);
-  
-  const cloudTex = makeFBMCloudTexture(512);
-  
-  const cloudMat = new THREE.MeshLambertMaterial({
-    map: cloudTex,
-    transparent: true,
-    depthWrite: false,
-    opacity: 0.95
-  });
 
   const gltfLoader = new GLTFLoader();
   
