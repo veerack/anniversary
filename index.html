@@ -107,6 +107,9 @@
     Walk: "assets/anim/Walk.fbx",
     Run:  "assets/anim/Run.fbx",
     Jump: "assets/anim/Jump.fbx",
+    Samba: "assets/anim/Samba.fbx",
+    Rumba: "assets/anim/Rumba.fbx",
+    Salsa: "assets/anim/Salsa.fbx",
   };
 
   const MEMORIES = [
@@ -131,7 +134,31 @@
   const STEP_INTERVAL_WALK = 0.42;
   const STEP_INTERVAL_RUN  = 0.28;
 
+  const MAP_RADIUS = 55;
+  const TERRAIN_SIZE = 120;
+  const TERRAIN_SEG = 140; // 120..200 ok
+
   // ====== Small utilities ======
+
+  function hash2(x, z) {
+    return (Math.sin(x * 127.1 + z * 311.7) * 43758.5453123) % 1;
+  }
+  
+  function terrainHeight(x, z) {
+    // soft hills + small noise
+    const h1 = Math.sin(x * 0.06) * 1.2 + Math.cos(z * 0.05) * 1.1;
+    const h2 = Math.sin((x + z) * 0.035) * 1.6;
+    const n  = (hash2(x * 0.35, z * 0.35) - 0.5) * 0.35;
+    let h = (h1 + h2) * 0.8 + n;
+  
+    // Flatten a “walking area” near center (nice playable)
+    const d = Math.hypot(x, z);
+    const flat = THREE.MathUtils.smoothstep(d, 0, 18);
+    h *= (1.0 - flat * 0.75);
+  
+    return h;
+  }
+  
   function normalizeKey(name) {
     return String(name || "")
       .replace(/^Armature\|/i, "")
@@ -218,7 +245,7 @@
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   renderer.physicallyCorrectLights = true;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 0.55; // was ~0.88 → too bright
+  renderer.toneMappingExposure = 0.42; // was ~0.88 → too bright
   renderer.outputColorSpace = THREE.SRGBColorSpace;
 
   app.appendChild(renderer.domElement);
@@ -232,10 +259,10 @@
   scene.add(sky);
 
   const skyU = sky.material.uniforms;
-  skyU["turbidity"].value = 6;
-  skyU["rayleigh"].value = 1.2;
-  skyU["mieCoefficient"].value = 0.004;
-  skyU["mieDirectionalG"].value = 0.8;
+  skyU["turbidity"].value = 4;
+  skyU["rayleigh"].value = 2.0;
+  skyU["mieCoefficient"].value = 0.002;
+  skyU["mieDirectionalG"].value = 0.85;
 
   const sunLight = new THREE.DirectionalLight(0xffffff, 2.2);
   sunLight.castShadow = true;
@@ -258,7 +285,10 @@
   const moonLight = new THREE.DirectionalLight(0xbfd6ff, 0.35);
   scene.add(moonLight);
 
-  scene.add(new THREE.AmbientLight(0xffffff, 0.02));
+  sunLight.intensity = 1.8 * dayFactor;  // was 2.6*
+  moonLight.intensity = 0.18 * (1 - dayFactor);
+  
+  scene.add(new THREE.AmbientLight(0xffffff, 0.015));
 
   const pmrem = new THREE.PMREMGenerator(renderer);
 
@@ -266,7 +296,7 @@
   let skyTime = 0.12; // [0..1) 0.25-ish = day, 0.75-ish = night
 
   let envRT = null;
-  let envRefreshTimer = 0;
+  let envRefreshTimer = 3.0;
 
   function updateSunForShadows(){
     // Keep the light "centered" around the player so shadows don't cut off.
@@ -493,22 +523,170 @@
   grassNormal.repeat.set(14,14);
   grassRough.repeat.set(14,14);
 
-  const ground = new THREE.Mesh(
-    new THREE.PlaneGeometry(60, 60),
-    new THREE.MeshStandardMaterial({
-      map: grassMap,
-      normalMap: grassNormal,
-      roughnessMap: grassRough,
-      roughness: 0.95,
-      metalness: 0.0,
-      normalScale: new THREE.Vector2(0.45, 0.45),
-      envMapIntensity: 0.35,
-    })
-  );
-  ground.rotation.x = -Math.PI/2;
+  const terrainGeo = new THREE.PlaneGeometry(TERRAIN_SIZE, TERRAIN_SIZE, TERRAIN_SEG, TERRAIN_SEG);
+  terrainGeo.rotateX(-Math.PI / 2);
+  
+  const posAttr = terrainGeo.attributes.position;
+  for (let i = 0; i < posAttr.count; i++) {
+    const x = posAttr.getX(i);
+    const z = posAttr.getZ(i);
+    const y = terrainHeight(x, z);
+    posAttr.setY(i, y);
+  }
+  terrainGeo.computeVertexNormals();
+  
+  const terrainMat = new THREE.MeshStandardMaterial({
+    color: 0x2b5a2d,
+    roughness: 0.95,
+    metalness: 0.0,
+    envMapIntensity: 0.15, // keep low to avoid wash
+  });
+  
+  const ground = new THREE.Mesh(terrainGeo, terrainMat);
   ground.receiveShadow = true;
   scene.add(ground);
 
+  function placeOnTerrain(obj, x, z, yOffset = 0) {
+    obj.position.set(x, terrainHeight(x, z) + yOffset, z);
+  }
+  
+  function addRock(x, z, s = 1) {
+    const g = new THREE.IcosahedronGeometry(0.9 * s, 1);
+    const m = new THREE.MeshStandardMaterial({ color: 0x3a3f4a, roughness: 0.95, metalness: 0.0, envMapIntensity: 0.12 });
+    const rock = new THREE.Mesh(g, m);
+    rock.castShadow = true;
+    rock.receiveShadow = true;
+    placeOnTerrain(rock, x, z, 0.1);
+    rock.rotation.y = Math.random() * Math.PI * 2;
+    scene.add(rock);
+  }
+  
+  function addTree(x, z, s = 1) {
+    const trunk = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.15 * s, 0.22 * s, 2.2 * s, 10),
+      new THREE.MeshStandardMaterial({ color: 0x4a2e1d, roughness: 1, metalness: 0 })
+    );
+    const crown = new THREE.Mesh(
+      new THREE.SphereGeometry(1.1 * s, 14, 14),
+      new THREE.MeshStandardMaterial({ color: 0x1e4a25, roughness: 1, metalness: 0 })
+    );
+    trunk.castShadow = crown.castShadow = true;
+    trunk.receiveShadow = crown.receiveShadow = true;
+  
+    const tree = new THREE.Group();
+    tree.add(trunk);
+    crown.position.y = 1.5 * s;
+    tree.add(crown);
+  
+    placeOnTerrain(tree, x, z, 0);
+    trunk.position.y = 1.1 * s;
+  
+    scene.add(tree);
+  }
+  
+  function scatterScene() {
+    // Ring of trees near edges
+    for (let i = 0; i < 70; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const r = 30 + Math.random() * 22;
+      const x = Math.cos(a) * r;
+      const z = Math.sin(a) * r;
+      addTree(x, z, 0.85 + Math.random() * 0.6);
+    }
+  
+    // Rocks around
+    for (let i = 0; i < 45; i++) {
+      const x = (Math.random() - 0.5) * 90;
+      const z = (Math.random() - 0.5) * 90;
+      if (Math.hypot(x, z) < 16) continue;
+      addRock(x, z, 0.6 + Math.random() * 1.3);
+    }
+  
+    // Simple “path” discs (visual, not physics)
+    const pathMat = new THREE.MeshStandardMaterial({ color: 0x3a3a2f, roughness: 1, metalness: 0 });
+    for (let i = 0; i < 26; i++) {
+      const t = i / 25;
+      const x = THREE.MathUtils.lerp(-18, 22, t);
+      const z = Math.sin(t * Math.PI * 2) * 8;
+      const y = terrainHeight(x, z) + 0.02;
+      const p = new THREE.Mesh(new THREE.CircleGeometry(2.2, 18), pathMat);
+      p.rotation.x = -Math.PI / 2;
+      p.position.set(x, y, z);
+      p.receiveShadow = true;
+      scene.add(p);
+    }
+  }
+  scatterScene();
+
+  function makeGrassInstanced(count = 18000) {
+    const bladeGeo = new THREE.PlaneGeometry(0.08, 0.9, 1, 4);
+    bladeGeo.translate(0, 0.45, 0); // base at y=0
+  
+    const bladeMat = new THREE.MeshStandardMaterial({
+      color: 0x2f7a34,
+      roughness: 1.0,
+      metalness: 0.0,
+      side: THREE.DoubleSide,
+      envMapIntensity: 0.05
+    });
+  
+    const inst = new THREE.InstancedMesh(bladeGeo, bladeMat, count);
+    inst.castShadow = false;
+    inst.receiveShadow = true;
+  
+    const dummy = new THREE.Object3D();
+    const seed = new Float32Array(count * 3);
+  
+    for (let i = 0; i < count; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const r = Math.sqrt(Math.random()) * (MAP_RADIUS - 2);
+      const x = Math.cos(a) * r;
+      const z = Math.sin(a) * r;
+  
+      const y = terrainHeight(x, z);
+      const s = 0.6 + Math.random() * 1.0;
+  
+      dummy.position.set(x, y, z);
+      dummy.rotation.y = Math.random() * Math.PI * 2;
+      dummy.scale.set(s, s * (0.9 + Math.random() * 0.4), s);
+  
+      dummy.updateMatrix();
+      inst.setMatrixAt(i, dummy.matrix);
+  
+      // store per-instance wind params (phase, strength, dir)
+      seed[i * 3 + 0] = Math.random() * 10;
+      seed[i * 3 + 1] = 0.2 + Math.random() * 0.6;
+      seed[i * 3 + 2] = (Math.random() - 0.5) * 0.8;
+    }
+  
+    inst.instanceMatrix.needsUpdate = true;
+  
+    return { inst, seed };
+  }
+  
+  const grass = makeGrassInstanced(16000);
+  scene.add(grass.inst);
+  
+  function updateGrassWind(time) {
+    const dummy = new THREE.Object3D();
+    for (let i = 0; i < grass.inst.count; i += 6) { 
+      // update only some per frame for perf (still looks good)
+      grass.inst.getMatrixAt(i, dummy.matrix);
+      dummy.matrix.decompose(dummy.position, dummy.quaternion, dummy.scale);
+  
+      const phase = grass.seed[i * 3 + 0];
+      const amp   = grass.seed[i * 3 + 1];
+      const dir   = grass.seed[i * 3 + 2];
+  
+      dummy.rotation.z = Math.sin(time * 1.2 + phase) * 0.12 * amp;
+      dummy.rotation.x = Math.cos(time * 1.0 + phase) * 0.08 * amp * dir;
+  
+      dummy.updateMatrix();
+      grass.inst.setMatrixAt(i, dummy.matrix);
+    }
+    grass.inst.instanceMatrix.needsUpdate = true;
+  }
+  
   // ====== Walls / props ======
   const wallMat = new THREE.MeshStandardMaterial({ color: 0x111634, roughness: 0.95, metalness: 0.0, envMapIntensity: 0.25 });
   function wall(w,h,d,x,y,z){
@@ -649,22 +827,47 @@
 
     mixer = new THREE.AnimationMixer(avatarRoot);
 
-    const [idleRaw, walkRaw, runRaw, jumpRaw] = await Promise.all([
+    const [idleRaw, walkRaw, runRaw, jumpRaw, sambaRaw, rumbaRaw, salsaRaw] = await Promise.all([
       loadFBX(ANIMS.Idle),
       loadFBX(ANIMS.Walk),
       loadFBX(ANIMS.Run),
       loadFBX(ANIMS.Jump),
+      loadFBX(ANIMS.Samba),
+      loadFBX(ANIMS.Rumba),
+      loadFBX(ANIMS.Salsa),
     ]);
 
     const idle = remapClipToAvatarBones(stripRootTranslation(idleRaw), avatarRoot, "Idle");
     const walk = remapClipToAvatarBones(stripRootTranslation(walkRaw), avatarRoot, "Walk");
     const run  = remapClipToAvatarBones(stripRootTranslation(runRaw),  avatarRoot, "Run");
     const jump = remapClipToAvatarBones(stripRootTranslation(jumpRaw), avatarRoot, "Jump");
-
+    const samba = remapClipToAvatarBones(stripRootTranslation(sambaRaw), avatarRoot, "Samba");
+    const rumba = remapClipToAvatarBones(stripRootTranslation(rumbaRaw), avatarRoot, "Rumba");
+    const salsa = remapClipToAvatarBones(stripRootTranslation(salsaRaw), avatarRoot, "Salsa");
+    
+    actions.Samba = mixer.clipAction(samba);
+    actions.Rumba = mixer.clipAction(rumba);
+    actions.Salsa = mixer.clipAction(salsa);
+    
+    for (const k of ["Samba","Rumba","Salsa"]) {
+      actions[k].loop = THREE.LoopOnce;
+      actions[k].clampWhenFinished = true;
+    }
+    
     actions.Idle = mixer.clipAction(idle);
     actions.Walk = mixer.clipAction(walk);
     actions.Jump = mixer.clipAction(jump);
 
+    let danceActive = null;
+
+    mixer.addEventListener("finished", (e) => {
+      if (e.action === actions.Jump) jumpAnimDone = true;
+    
+      if (danceActive && e.action === actions[danceActive]) {
+        danceActive = null; // return to locomotion
+      }
+    });
+    
     if ((run.tracks?.length || 0) < MIN_TRACKS_FOR_RUN) {
       actions.Run = mixer.clipAction(walk);
       actions.Run.setEffectiveTimeScale(1.35);
@@ -792,6 +995,11 @@
   window.addEventListener("keydown", (e) => {
     const k = e.key.toLowerCase();
     keys.add(k);
+  
+    if (k === "1") { danceActive = "Samba"; playAction("Samba", 0.08); }
+    if (k === "2") { danceActive = "Rumba"; playAction("Rumba", 0.08); }
+    if (k === "3") { danceActive = "Salsa"; playAction("Salsa", 0.08); }
+  
     if (k === " " || k === "spacebar") jumpRequested = true;
   });
   window.addEventListener("keyup", (e) => keys.delete(e.key.toLowerCase()));
@@ -800,8 +1008,12 @@
   const tmpVec = new THREE.Vector3();
 
   function clampToMap(pos) {
-    pos.x = Math.max(-18.5, Math.min(18.5, pos.x));
-    pos.z = Math.max(-18.5, Math.min(18.5, pos.z));
+    const d = Math.hypot(pos.x, pos.z);
+    if (d > MAP_RADIUS) {
+      const s = MAP_RADIUS / d;
+      pos.x *= s;
+      pos.z *= s;
+    }
   }
 
   let isJumping = false;
@@ -866,26 +1078,40 @@
       clampToMap(player.position);
     }
 
+    if (isMoving && danceActive) {
+      // cancel dance immediately when player starts moving
+      danceActive = null;
+      // fade out current action so locomotion can take over
+      if (currentAction) currentAction.fadeOut(0.08);
+    }
+    
     // jump physics
     if (isJumping) {
       yVel += GRAVITY * dt;
       player.position.y += yVel * dt;
 
-      if (player.position.y <= 0) {
-        player.position.y = 0;
+      const groundY = terrainHeight(player.position.x, player.position.z);
+      
+      if (player.position.y <= groundY) {
+        player.position.y = groundY;
         yVel = 0;
         if (jumpAnimDone) isJumping = false;
       }
     }
 
+    if (!isJumping) {
+      player.position.y = terrainHeight(player.position.x, player.position.z);
+    }
+    
     // animation switch
     if (actions.Idle) {
-      if (isJumping) playAction("Jump", 0.05);
+      if (danceActive) {
+        playAction(danceActive, 0.06);
+      } else if (isJumping) playAction("Jump", 0.05);
       else if (isMoving && isRunning) playAction("Run", 0.12);
       else if (isMoving) playAction("Walk", 0.14);
       else playAction("Idle", 0.18);
     }
-
     // footsteps
     if (!isJumping && isMoving) {
       const interval = isRunning ? STEP_INTERVAL_RUN : STEP_INTERVAL_WALK;
@@ -937,6 +1163,7 @@
     // sky/env + clouds
     updateSkyAndEnv(dt);
     updateClouds(dt);
+    updateGrassWind(clock.elapsedTime);
 
     const t = clock.elapsedTime;
     for (const s of spots) {
