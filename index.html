@@ -244,9 +244,9 @@
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-  renderer.physicallyCorrectLights = true;
+  renderer.physicallyCorrectLights = false;
+  renderer.toneMappingExposure = 1.0; // start here
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 0.8; // was ~0.88 → too bright
   renderer.outputColorSpace = THREE.SRGBColorSpace;
 
   app.appendChild(renderer.domElement);
