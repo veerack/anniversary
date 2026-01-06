@@ -471,6 +471,9 @@
       checkMemoryTriggers();
       controls.update();
       renderer.render(scene, camera);
+
+      if (window.__avatarBox && window.__avatarRoot) window.__avatarBox.update();
+      
     }
     animate();
 
