@@ -254,8 +254,28 @@
       avatarRoot.rotation.set(0,0,0);
       avatarRoot.scale.set(1,1,1);
 
+      // DEBUG: force geometry to be visible no matter what (ignore textures/transparency)
+      avatarRoot.traverse((o) => {
+        if (o.isMesh) {
+          o.frustumCulled = false;
+          o.castShadow = false;
+          o.receiveShadow = false;
+          o.material = new THREE.MeshNormalMaterial(); // <-- impossible to be invisible unless not rendered
+          o.visible = true;
+        }
+      });
+
       player.add(avatarRoot);
 
+      // DEBUG: show bounding box even if mesh/materials are broken
+      const box = new THREE.BoxHelper(avatarRoot, 0xff0000);
+      box.frustumCulled = false;
+      scene.add(box);
+      
+      // keep updating it
+      window.__avatarBox = box;
+      window.__avatarRoot = avatarRoot;
+      
       player.remove(tempCapsule);
 
       mixer = new THREE.AnimationMixer(avatarRoot);
