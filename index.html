@@ -544,7 +544,7 @@
     color: 0xffffff,        // IMPORTANT: don’t tint dark if you’re using an albedo map
     roughness: 1.0,
     metalness: 0.0,
-    envMapIntensity: 0.08,
+    envMapIntensity: 0.55,
   });
   
   const ground = new THREE.Mesh(terrainGeo, terrainMat);
@@ -639,7 +639,7 @@
       roughness: 1.0,
       metalness: 0.0,
       side: THREE.DoubleSide,
-      envMapIntensity: 0.05
+      envMapIntensity: 0.15
     });
   
     const inst = new THREE.InstancedMesh(bladeGeo, bladeMat, count);
@@ -748,7 +748,7 @@
     emissiveIntensity: 1.6,
     roughness: 0.25,
     metalness: 0.35,
-    envMapIntensity: 0.05
+    envMapIntensity: 0.25
   });
 
   for (const mem of MEMORIES) {
