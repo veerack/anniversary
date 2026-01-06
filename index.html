@@ -141,24 +141,33 @@
       });
     }
 
-    function findFirstSkinnedMesh(root) {
+    function findBoneByName(root, nameLower) {
       let found = null;
       root.traverse((o) => {
-        if (!found && o.isSkinnedMesh && o.skeleton && o.skeleton.bones && o.skeleton.bones.length) {
-          found = o;
-        }
+        if (!found && o.isBone && o.name && o.name.toLowerCase() === nameLower) found = o;
       });
       return found;
     }
-
-    function findSkeletonRootFromFBX(fbx) {
-      const skinned = findFirstSkinnedMesh(fbx);
-      if (!skinned) return null;
-
-      let bone = skinned.skeleton.bones[0];
-      while (bone.parent && bone.parent.isBone) bone = bone.parent;
-      return bone;
+    
+    function findAnyBone(root) {
+      let found = null;
+      root.traverse((o) => {
+        if (!found && o.isBone) found = o;
+      });
+      return found;
     }
+    
+    // Works for Mixamo "Without Skin": find mixamorigHips bone, else any bone, then climb to top
+    function findSkeletonRootFromFBX(fbx) {
+      let bone =
+        findBoneByName(fbx, "mixamorighips") ||
+        findBoneByName(fbx, "hips") ||
+        findAnyBone(fbx);
+    
+      if (!bone) return null;
+    
+      while (bone.parent && bone.parent.isBone) bone = bone.parent;
+      retur
 
     function stripRootXZ(clip) {
       // Keep animations “in place” (prevents drift)
@@ -296,7 +305,10 @@
       ]);
 
       function makeAction(name, pack) {
-        const srcRoot = findSkeletonRootFromFBX(pack.fbx);
+        const srcRoot =
+          findBoneByName(pack.fbx, "mixamorighips") ||
+          findBoneByName(pack.fbx, "hips") ||
+          findSkeletonRootFromFBX(pack.fbx);
         if (!srcRoot) throw new Error("FBX has no skinned skeleton: " + name);
 
         const srcClip = stripRootXZ(pack.clip);
