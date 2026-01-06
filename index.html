@@ -240,9 +240,6 @@
   const sunLight = new THREE.DirectionalLight(0xffffff, 2.2);
   sunLight.castShadow = true;
   
-  sunLight.target = player;       // IMPORTANT
-  scene.add(sunLight.target);     // make sure target is in scene
-  
   sunLight.shadow.mapSize.set(4096, 4096);
   sunLight.shadow.camera.near = 0.5;
   sunLight.shadow.camera.far = 140;
@@ -540,6 +537,9 @@
   player.position.set(0,0,8);
   scene.add(player);
 
+  sunLight.target = player;       // IMPORTANT
+  scene.add(sunLight.target);     // make sure target is in scene
+  
   // ====== Orbit camera locked to player ======
   const controls = new OrbitControls(camera, renderer.domElement);
   controls.enableDamping = true;
