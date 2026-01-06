@@ -1027,8 +1027,8 @@
     const speed = isRunning ? RUN_SPEED : WALK_SPEED;
   
     let forward = 0, right = 0;
-    if (keys.has("w")) forward += 1;
-    if (keys.has("s")) forward -= 1;
+    if (keys.has("w")) forward -= 1;
+    if (keys.has("s")) forward += 1;
     if (keys.has("d")) right += 1;
     if (keys.has("a")) right -= 1;
   
