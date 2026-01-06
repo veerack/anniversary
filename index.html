@@ -98,6 +98,7 @@
   import { OrbitControls } from "three/addons/controls/OrbitControls.js";
   import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
   import { FBXLoader } from "three/addons/loaders/FBXLoader.js";
+  import { Sky } from "three/addons/objects/Sky.js";
 
   // ====== EDIT THESE ======
   const AVATAR_URL = "https://models.readyplayer.me/695c48e31c1817592c4ec48b.glb";
@@ -116,21 +117,19 @@
   ];
 
   // ====== Tuning ======
-  const WALK_SPEED = 2.6;   // slower
-  const RUN_SPEED  = 8;   // comfy run
-  const AIR_CONTROL = 0.65; // you can still steer a bit in air
+  const WALK_SPEED = 2.6;
+  const RUN_SPEED  = 8.0;
+  const AIR_CONTROL = 0.65;
 
-  const GRAVITY = -18.0;    // units/s^2
-  const JUMP_VEL = 6.4;     // units/s
+  const GRAVITY = -18.0;
+  const JUMP_VEL = 6.4;
 
-  const CAM_HEIGHT = 1.85;
-  const CAM_DIST   = 3.8;   // close behind
-  const CAM_SIDE   = 0.0;
-  const CAM_LERP   = 0.16;  // smoothing
   const LOOK_HEIGHT = 1.45;
-
-  // If Run clip maps fewer than this number of tracks, it’s basically broken -> fallback to Walk.
   const MIN_TRACKS_FOR_RUN = 40;
+
+  // footsteps timing
+  const STEP_INTERVAL_WALK = 0.42;
+  const STEP_INTERVAL_RUN  = 0.28;
 
   // ====== Small utilities ======
   function normalizeKey(name) {
@@ -152,7 +151,6 @@
   }
 
   function stripRootTranslation(clip) {
-    // Remove ALL position tracks so animations are fully "in-place" (we move manually).
     const tracks = clip.tracks.filter((t) => !t.name.toLowerCase().endsWith(".position"));
     return new THREE.AnimationClip(clip.name, clip.duration, tracks);
   }
@@ -160,7 +158,6 @@
   function remapClipToAvatarBones(clip, avatarRoot, debugLabel) {
     const boneMap = buildBoneKeyToNameMap(avatarRoot);
     const outTracks = [];
-
     let mapped = 0;
 
     for (const tr of clip.tracks) {
@@ -212,82 +209,289 @@
   // ====== Scene setup ======
   const app = document.getElementById("app");
   const scene = new THREE.Scene();
-  scene.fog = new THREE.Fog(0x05060a, 12, 70);
+
+  // renderer (better lighting + reflections)
+  const renderer = new THREE.WebGLRenderer({ antialias:true });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 1.0;
+  renderer.physicallyCorrectLights = true;
+
+  app.appendChild(renderer.domElement);
 
   const camera = new THREE.PerspectiveCamera(65, window.innerWidth / window.innerHeight, 0.1, 250);
   camera.position.set(0, 4, 6);
 
-  const renderer = new THREE.WebGLRenderer({ antialias:true });
-  renderer.setClearColor(0x05060a, 1);
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-  renderer.setSize(window.innerWidth, window.innerHeight);
-  renderer.shadowMap.enabled = true;
-  app.appendChild(renderer.domElement);
+  // ====== Sky + Sun/Moon + Env reflections ======
+  const sky = new Sky();
+  sky.scale.setScalar(450000);
+  scene.add(sky);
 
-  // Lights
-  scene.add(new THREE.HemisphereLight(0xaecbff, 0x1a1d2b, 0.95));
-  const dir = new THREE.DirectionalLight(0xffffff, 1.15);
-  dir.position.set(12, 18, 10);
-  dir.castShadow = true;
-  dir.shadow.mapSize.set(1024, 1024);
-  dir.shadow.camera.left = -30;
-  dir.shadow.camera.right = 30;
-  dir.shadow.camera.top = 30;
-  dir.shadow.camera.bottom = -30;
-  scene.add(dir);
+  const skyU = sky.material.uniforms;
+  skyU["turbidity"].value = 7.5;
+  skyU["rayleigh"].value = 2.0;
+  skyU["mieCoefficient"].value = 0.004;
+  skyU["mieDirectionalG"].value = 0.85;
 
-  // Procedural grass texture
-  function makeGrassTexture() {
+  // Sun & Moon lights
+  const sunLight = new THREE.DirectionalLight(0xffffff, 3.2);
+  sunLight.castShadow = true;
+  sunLight.shadow.mapSize.set(2048, 2048);
+  sunLight.shadow.camera.left = -40;
+  sunLight.shadow.camera.right = 40;
+  sunLight.shadow.camera.top = 40;
+  sunLight.shadow.camera.bottom = -40;
+  sunLight.shadow.camera.near = 0.5;
+  sunLight.shadow.camera.far = 120;
+  scene.add(sunLight);
+
+  const moonLight = new THREE.DirectionalLight(0xbfd6ff, 0.35);
+  scene.add(moonLight);
+
+  scene.add(new THREE.AmbientLight(0xffffff, 0.06));
+
+  const pmrem = new THREE.PMREMGenerator(renderer);
+  let envRT = null;
+
+  // simple day-night progression (slow)
+  let skyTime = 0.12; // [0..1) 0.25-ish = day, 0.75-ish = night
+
+  function updateSkyAndEnv(dt){
+    // very slow loop
+    skyTime = (skyTime + dt * 0.004) % 1;
+
+    // sun elevation: day high, night below horizon
+    const theta = Math.PI * 2 * skyTime; // 0..2pi
+    const elevation = Math.sin(theta) * 35;  // degrees
+    const azimuth = 180 + Math.cos(theta) * 35;
+
+    const phi = THREE.MathUtils.degToRad(90 - elevation);
+    const th  = THREE.MathUtils.degToRad(azimuth);
+
+    const sunPos = new THREE.Vector3().setFromSphericalCoords(1, phi, th);
+    skyU["sunPosition"].value.copy(sunPos);
+
+    // position lights
+    sunLight.position.copy(sunPos).multiplyScalar(120);
+    moonLight.position.copy(sunPos).multiplyScalar(-120);
+
+    // adjust intensities (night dims)
+    const dayFactor = THREE.MathUtils.clamp((elevation + 6) / 18, 0, 1); // 0 at night, 1 at day
+    sunLight.intensity = 3.2 * dayFactor;
+    moonLight.intensity = 0.35 * (1 - dayFactor);
+
+    // fog color shifts
+    const dayFog = new THREE.Color(0xaecbff);
+    const nightFog = new THREE.Color(0x05060a);
+    const fogCol = nightFog.clone().lerp(dayFog, dayFactor);
+    if (!scene.fog) scene.fog = new THREE.Fog(fogCol, 18, 95);
+    scene.fog.color.copy(fogCol);
+
+    // environment map from sky (for reflections)
+    if (envRT) envRT.dispose();
+    envRT = pmrem.fromScene(sky);
+    scene.environment = envRT.texture;
+
+    // background color
+    renderer.setClearColor(fogCol, 1);
+  }
+
+  // ====== Clouds (billboards with procedural alpha texture) ======
+  function makeCloudTexture() {
     const c = document.createElement("canvas");
-    c.width = 256; c.height = 256;
+    c.width = 256; c.height = 128;
     const g = c.getContext("2d");
 
-    g.fillStyle = "#0b1a10";
-    g.fillRect(0,0,c.width,c.height);
+    g.clearRect(0,0,c.width,c.height);
 
-    for (let i=0;i<5000;i++){
-      const x = (Math.random()*c.width)|0;
-      const y = (Math.random()*c.height)|0;
-      const v = 35 + (Math.random()*60)|0;
-      g.fillStyle = `rgb(${8},${v},${20})`;
-      g.fillRect(x,y,1,1);
-    }
-
-    for (let i=0;i<200;i++){
+    // soft blobs
+    for (let i=0;i<26;i++){
       const x = Math.random()*c.width;
-      const y = Math.random()*c.height;
-      const r = 2 + Math.random()*6;
-      g.globalAlpha = 0.08;
-      g.fillStyle = "#89ffb0";
+      const y = 20 + Math.random()*70;
+      const r = 18 + Math.random()*40;
+
+      const grd = g.createRadialGradient(x,y, r*0.1, x,y, r);
+      grd.addColorStop(0, "rgba(255,255,255,0.35)");
+      grd.addColorStop(1, "rgba(255,255,255,0)");
+      g.fillStyle = grd;
       g.beginPath();
       g.arc(x,y,r,0,Math.PI*2);
       g.fill();
     }
-    g.globalAlpha = 1;
 
     const tex = new THREE.CanvasTexture(c);
-    tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-    tex.repeat.set(8,8);
-    tex.anisotropy = Math.min(renderer.capabilities.getMaxAnisotropy(), 8);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
     tex.needsUpdate = true;
     return tex;
   }
 
+  const clouds = new THREE.Group();
+  scene.add(clouds);
+
+  const cloudTex = makeCloudTexture();
+  const cloudMat = new THREE.MeshStandardMaterial({
+    map: cloudTex,
+    transparent: true,
+    opacity: 0.65,
+    depthWrite: false,
+    roughness: 1.0,
+    metalness: 0.0,
+    emissive: new THREE.Color(0x0),
+  });
+
+  for (let i=0;i<18;i++){
+    const w = 18 + Math.random()*22;
+    const h = w * (0.45 + Math.random()*0.2);
+    const m = new THREE.Mesh(new THREE.PlaneGeometry(w,h), cloudMat);
+    m.position.set((Math.random()-0.5)*140, 26 + Math.random()*18, (Math.random()-0.5)*140);
+    m.rotation.y = Math.random()*Math.PI*2;
+    m.renderOrder = 10;
+    clouds.add(m);
+  }
+
+  function updateClouds(dt){
+    // drift clouds slowly
+    for (const m of clouds.children){
+      m.position.x += dt * 0.45;
+      if (m.position.x > 80) m.position.x = -80;
+      // face camera (billboard)
+      m.lookAt(camera.position.x, m.position.y, camera.position.z);
+    }
+  }
+
+  // ====== Proper-ish grass (color + normal + roughness maps) ======
+  function makeGrassMaps() {
+    const size = 512;
+
+    // albedo
+    const c0 = document.createElement("canvas");
+    c0.width = c0.height = size;
+    const g0 = c0.getContext("2d");
+
+    g0.fillStyle = "#0b2411";
+    g0.fillRect(0,0,size,size);
+
+    for (let i=0;i<22000;i++){
+      const x = (Math.random()*size)|0;
+      const y = (Math.random()*size)|0;
+      const v = 50 + (Math.random()*90)|0;
+      const r = 10 + (Math.random()*20)|0;
+      g0.fillStyle = `rgb(${r},${v},${20})`;
+      g0.fillRect(x,y,1,1);
+    }
+
+    // little blades strokes
+    g0.globalAlpha = 0.35;
+    for (let i=0;i<4500;i++){
+      const x = Math.random()*size;
+      const y = Math.random()*size;
+      const len = 2 + Math.random()*6;
+      const ang = Math.random()*Math.PI*2;
+      g0.strokeStyle = "rgba(160,255,190,0.20)";
+      g0.lineWidth = 1;
+      g0.beginPath();
+      g0.moveTo(x,y);
+      g0.lineTo(x + Math.cos(ang)*len, y + Math.sin(ang)*len);
+      g0.stroke();
+    }
+    g0.globalAlpha = 1;
+
+    // normal map (fake bumps)
+    const cN = document.createElement("canvas");
+    cN.width = cN.height = size;
+    const gN = cN.getContext("2d");
+    const imgN = gN.createImageData(size,size);
+
+    function heightAt(x,y){
+      // cheap pseudo height based on random dots using hashing
+      const n = Math.sin(x*12.9898 + y*78.233) * 43758.5453;
+      return n - Math.floor(n);
+    }
+
+    for (let y=0;y<size;y++){
+      for (let x=0;x<size;x++){
+        const hL = heightAt(x-1,y);
+        const hR = heightAt(x+1,y);
+        const hD = heightAt(x,y-1);
+        const hU = heightAt(x,y+1);
+
+        const dx = (hR - hL) * 1.2;
+        const dy = (hU - hD) * 1.2;
+
+        // normal = normalize([-dx, -dy, 1])
+        let nx = -dx, ny = -dy, nz = 1.0;
+        const inv = 1 / Math.hypot(nx,ny,nz);
+        nx*=inv; ny*=inv; nz*=inv;
+
+        const i = (y*size + x)*4;
+        imgN.data[i+0] = ((nx*0.5+0.5)*255)|0;
+        imgN.data[i+1] = ((ny*0.5+0.5)*255)|0;
+        imgN.data[i+2] = ((nz*0.5+0.5)*255)|0;
+        imgN.data[i+3] = 255;
+      }
+    }
+    gN.putImageData(imgN,0,0);
+
+    // roughness map (slight variation)
+    const cR = document.createElement("canvas");
+    cR.width = cR.height = size;
+    const gR = cR.getContext("2d");
+    const imgR = gR.createImageData(size,size);
+    for (let y=0;y<size;y++){
+      for (let x=0;x<size;x++){
+        const h = heightAt(x,y);
+        const r = (170 + h*70)|0; // 170..240
+        const i = (y*size + x)*4;
+        imgR.data[i+0] = r;
+        imgR.data[i+1] = r;
+        imgR.data[i+2] = r;
+        imgR.data[i+3] = 255;
+      }
+    }
+    gR.putImageData(imgR,0,0);
+
+    const map = new THREE.CanvasTexture(c0);
+    map.colorSpace = THREE.SRGBColorSpace;
+    map.wrapS = map.wrapT = THREE.RepeatWrapping;
+
+    const normalMap = new THREE.CanvasTexture(cN);
+    normalMap.wrapS = normalMap.wrapT = THREE.RepeatWrapping;
+
+    const roughnessMap = new THREE.CanvasTexture(cR);
+    roughnessMap.wrapS = roughnessMap.wrapT = THREE.RepeatWrapping;
+
+    return { map, normalMap, roughnessMap };
+  }
+
+  const { map:grassMap, normalMap:grassNormal, roughnessMap:grassRough } = makeGrassMaps();
+  grassMap.repeat.set(14,14);
+  grassNormal.repeat.set(14,14);
+  grassRough.repeat.set(14,14);
+
   const ground = new THREE.Mesh(
     new THREE.PlaneGeometry(60, 60),
     new THREE.MeshStandardMaterial({
-      map: makeGrassTexture(),
-      color: 0xffffff,
+      map: grassMap,
+      normalMap: grassNormal,
+      roughnessMap: grassRough,
       roughness: 0.95,
-      metalness: 0
+      metalness: 0.0,
+      normalScale: new THREE.Vector2(0.8, 0.8),
+      envMapIntensity: 0.35,
     })
   );
   ground.rotation.x = -Math.PI/2;
   ground.receiveShadow = true;
   scene.add(ground);
 
-  // Walls / boundaries
-  const wallMat = new THREE.MeshStandardMaterial({ color: 0x111634, roughness: 0.9 });
+  // ====== Walls / props ======
+  const wallMat = new THREE.MeshStandardMaterial({ color: 0x111634, roughness: 0.95, metalness: 0.0, envMapIntensity: 0.25 });
   function wall(w,h,d,x,y,z){
     const m = new THREE.Mesh(new THREE.BoxGeometry(w,h,d), wallMat);
     m.position.set(x,y,z);
@@ -300,8 +504,7 @@
   wall(0.8, 2.5, 40, -20, 1.25, 0);
   wall(0.8, 2.5, 40,  20, 1.25, 0);
 
-  // Props
-  const propMat = new THREE.MeshStandardMaterial({ color: 0x1a2250, roughness: 0.8 });
+  const propMat = new THREE.MeshStandardMaterial({ color: 0x1a2250, roughness: 0.75, metalness: 0.12, envMapIntensity: 0.55 });
   function pillar(x,z){
     const p = new THREE.Mesh(new THREE.CylinderGeometry(0.6,0.8,3.2,18), propMat);
     p.position.set(x,1.6,z);
@@ -310,7 +513,7 @@
   }
   pillar(-10,10); pillar(10,-10); pillar(0,0);
 
-  // Player container
+  // ====== Player container ======
   const player = new THREE.Group();
   player.position.set(0,0,8);
   scene.add(player);
@@ -319,46 +522,42 @@
   const controls = new OrbitControls(camera, renderer.domElement);
   controls.enableDamping = true;
   controls.enablePan = false;
-  
-  // zoom with wheel
   controls.enableZoom = true;
   controls.zoomSpeed = 0.9;
-  
-  // keep it close + consistent
+
   controls.minDistance = 2.6;
   controls.maxDistance = 7.0;
-  
   controls.minPolarAngle = 0.15;
   controls.maxPolarAngle = Math.PI * 0.48;
-  
   controls.rotateSpeed = 0.6;
-  
-  // initial target
+
   controls.target.copy(player.position).add(new THREE.Vector3(0, LOOK_HEIGHT, 0));
   controls.update();
-  
+
   // ====== Memory spots ======
   const spots = [];
   const spotGeo = new THREE.TorusGeometry(1.0, 0.12, 16, 50);
-  const glowMat = new THREE.MeshStandardMaterial({
+  const glowBase = new THREE.MeshStandardMaterial({
     color: 0x7da6ff,
     emissive: 0x3b66ff,
     emissiveIntensity: 1.6,
-    roughness: 0.2,
-    metalness: 0.25
+    roughness: 0.25,
+    metalness: 0.35,
+    envMapIntensity: 0.8
   });
 
   for (const mem of MEMORIES) {
-    const ring = new THREE.Mesh(spotGeo, glowMat.clone());
+    const ring = new THREE.Mesh(spotGeo, glowBase.clone());
     ring.rotation.x = Math.PI / 2;
     ring.position.copy(mem.pos);
     ring.position.y = 0.12;
     ring.receiveShadow = true;
+    ring.castShadow = false;
     scene.add(ring);
 
     const marker = new THREE.Mesh(
       new THREE.SphereGeometry(0.18, 18, 18),
-      new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0x7da6ff, emissiveIntensity: 1.2 })
+      new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0x7da6ff, emissiveIntensity: 1.0, roughness: 0.2, metalness: 0.3, envMapIntensity: 1.0 })
     );
     marker.position.copy(mem.pos);
     marker.position.y = 1.35;
@@ -368,7 +567,7 @@
     spots.push({ mem, ring, marker });
   }
 
-  // UI
+  // ====== UI panel ======
   const panel = document.getElementById("panel");
   const panelTitle = document.getElementById("panelTitle");
   const panelText = document.getElementById("panelText");
@@ -411,6 +610,8 @@
     });
   }
 
+  let jumpAnimDone = false;
+
   async function setupAvatarAndAnims(){
     const gltf = await new Promise((resolve, reject) => {
       gltfLoader.load(AVATAR_URL, resolve, undefined, reject);
@@ -442,10 +643,7 @@
     actions.Walk = mixer.clipAction(walk);
     actions.Jump = mixer.clipAction(jump);
 
-    // --- Run: protect against T-pose ---
     if ((run.tracks?.length || 0) < MIN_TRACKS_FOR_RUN) {
-      // fallback: reuse walk action as "run" with faster timeScale
-      console.warn("Run clip mapped too few tracks -> falling back to Walk for Run.");
       actions.Run = mixer.clipAction(walk);
       actions.Run.setEffectiveTimeScale(1.35);
     } else {
@@ -459,22 +657,121 @@
     actions.Jump.loop = THREE.LoopOnce;
     actions.Jump.clampWhenFinished = true;
 
-    // When jump animation finishes, we can exit jump state IF we already landed.
-    if (mixer) {
-      mixer.addEventListener("finished", (e) => {
-        if (e.action === actions.Jump) jumpAnimDone = true;
-      });
-    }
+    mixer.addEventListener("finished", (e) => {
+      if (e.action === actions.Jump) jumpAnimDone = true;
+    });
 
-    console.log("Animations ready:", Object.keys(actions));
     playAction("Idle", 0.0);
   }
 
   setupAvatarAndAnims().catch((e) => console.error("Avatar/anims failed:", e));
 
+  // ====== Audio (procedural wind + footsteps) ======
+  let audioCtx = null;
+  let master = null;
+  let windGain = null;
+
+  function ensureAudio(){
+    if (audioCtx) return;
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    master = audioCtx.createGain();
+    master.gain.value = 0.9;
+    master.connect(audioCtx.destination);
+
+    // --- Wind: looped noise through bandpass ---
+    const bufferSize = audioCtx.sampleRate * 2;
+    const noiseBuf = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
+    const data = noiseBuf.getChannelData(0);
+    for (let i=0;i<bufferSize;i++){
+      data[i] = (Math.random()*2-1) * 0.45;
+    }
+    const windSrc = audioCtx.createBufferSource();
+    windSrc.buffer = noiseBuf;
+    windSrc.loop = true;
+
+    const bp = audioCtx.createBiquadFilter();
+    bp.type = "bandpass";
+    bp.frequency.value = 380;
+    bp.Q.value = 0.8;
+
+    const lp = audioCtx.createBiquadFilter();
+    lp.type = "lowpass";
+    lp.frequency.value = 1400;
+
+    windGain = audioCtx.createGain();
+    windGain.gain.value = 0.06; // subtle
+
+    windSrc.connect(bp);
+    bp.connect(lp);
+    lp.connect(windGain);
+    windGain.connect(master);
+    windSrc.start();
+  }
+
+  function playFootstep(strength=1){
+    if (!audioCtx) return;
+
+    const t = audioCtx.currentTime;
+
+    // thump
+    const osc = audioCtx.createOscillator();
+    osc.type = "sine";
+    osc.frequency.setValueAtTime(120, t);
+    osc.frequency.exponentialRampToValueAtTime(70, t + 0.08);
+
+    const g = audioCtx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.08 * strength, t + 0.01);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.12);
+
+    // grit
+    const nSize = (audioCtx.sampleRate * 0.12)|0;
+    const nb = audioCtx.createBuffer(1, nSize, audioCtx.sampleRate);
+    const nd = nb.getChannelData(0);
+    for (let i=0;i<nSize;i++){
+      nd[i] = (Math.random()*2-1) * (1 - i/nSize);
+    }
+    const ns = audioCtx.createBufferSource();
+    ns.buffer = nb;
+
+    const hp = audioCtx.createBiquadFilter();
+    hp.type = "highpass";
+    hp.frequency.value = 700;
+
+    const ng = audioCtx.createGain();
+    ng.gain.setValueAtTime(0.0001, t);
+    ng.gain.exponentialRampToValueAtTime(0.05 * strength, t + 0.01);
+    ng.gain.exponentialRampToValueAtTime(0.0001, t + 0.09);
+
+    osc.connect(g);
+    g.connect(master);
+
+    ns.connect(hp);
+    hp.connect(ng);
+    ng.connect(master);
+
+    osc.start(t);
+    osc.stop(t + 0.14);
+
+    ns.start(t);
+    ns.stop(t + 0.12);
+  }
+
+  // start audio on first user gesture
+  window.addEventListener("pointerdown", async () => {
+    ensureAudio();
+    if (audioCtx && audioCtx.state !== "running") await audioCtx.resume();
+  }, { once: true });
+
   // ====== Movement + Jump physics ======
   const keys = new Set();
-  window.addEventListener("keydown", (e) => keys.add(e.key.toLowerCase()));
+  let jumpRequested = false;
+
+  window.addEventListener("keydown", (e) => {
+    const k = e.key.toLowerCase();
+    keys.add(k);
+    if (k === " " || k === "spacebar") jumpRequested = true;
+  });
   window.addEventListener("keyup", (e) => keys.delete(e.key.toLowerCase()));
 
   const clock = new THREE.Clock();
@@ -487,7 +784,6 @@
 
   let isJumping = false;
   let yVel = 0;
-  let jumpAnimDone = false;
 
   function startJump() {
     if (isJumping) return;
@@ -497,10 +793,15 @@
     playAction("Jump", 0.06);
   }
 
+  // footsteps timer
+  let stepTimer = 0;
+
   function updatePlayer(dt){
-    // Jump input
-    if ((keys.has(" ") || keys.has("spacebar")) && !isJumping) {
+    if (jumpRequested && !isJumping) {
+      jumpRequested = false;
       startJump();
+    } else if (jumpRequested) {
+      jumpRequested = false;
     }
 
     const isRunning = keys.has("shift");
@@ -512,12 +813,12 @@
     if (keys.has("d")) right += 1;
     if (keys.has("a")) right -= 1;
 
-    // Basis from camera direction (orbit-friendly)
+    // Basis from camera direction
     const dirF = new THREE.Vector3();
     camera.getWorldDirection(dirF);
     dirF.y = 0;
     dirF.normalize();
-    
+
     const dirR = new THREE.Vector3().crossVectors(dirF, new THREE.Vector3(0,1,0)).normalize();
 
     tmpVec.set(0,0,0);
@@ -526,17 +827,16 @@
 
     const isMoving = tmpVec.lengthSq() > 0;
 
-    // Rotate character toward movement direction
+    // rotate toward movement
     if (isMoving) {
       const mv = tmpVec.clone().normalize();
       const targetYaw = Math.atan2(mv.x, mv.z);
-    
       let d = targetYaw - player.rotation.y;
       d = Math.atan2(Math.sin(d), Math.cos(d));
       player.rotation.y += d * Math.min(1, dt * 10);
     }
 
-    // Apply horizontal movement
+    // horizontal move
     if (isMoving) {
       const control = isJumping ? AIR_CONTROL : 1.0;
       tmpVec.normalize().multiplyScalar(speed * control * dt);
@@ -544,43 +844,46 @@
       clampToMap(player.position);
     }
 
-    // Apply jump physics
+    // jump physics
     if (isJumping) {
       yVel += GRAVITY * dt;
       player.position.y += yVel * dt;
 
-      // Land
       if (player.position.y <= 0) {
         player.position.y = 0;
         yVel = 0;
-
-        // Only exit jump when animation ended OR we’ve been in jump long enough.
-        // (If your Jump FBX is short, this avoids snapping too soon.)
-        if (jumpAnimDone) {
-          isJumping = false;
-        }
+        if (jumpAnimDone) isJumping = false;
       }
     }
 
-    // Animation switching
+    // animation switch
     if (actions.Idle) {
-      if (isJumping) {
-        playAction("Jump", 0.05);
-      } else if (isMoving && isRunning) {
-        playAction("Run", 0.12);
-      } else if (isMoving) {
-        playAction("Walk", 0.14);
-      } else {
-        playAction("Idle", 0.18);
+      if (isJumping) playAction("Jump", 0.05);
+      else if (isMoving && isRunning) playAction("Run", 0.12);
+      else if (isMoving) playAction("Walk", 0.14);
+      else playAction("Idle", 0.18);
+    }
+
+    // footsteps
+    if (!isJumping && isMoving) {
+      const interval = isRunning ? STEP_INTERVAL_RUN : STEP_INTERVAL_WALK;
+      stepTimer -= dt;
+      if (stepTimer <= 0) {
+        stepTimer = interval;
+        // strength varies with run/walk
+        const strength = isRunning ? 1.0 : 0.7;
+        playFootstep(strength);
       }
+    } else {
+      // reset so first step happens quickly when you start moving again
+      stepTimer = Math.min(stepTimer, 0.08);
     }
   }
 
   function updateCamera(dt){
     const target = player.position.clone();
     target.y += LOOK_HEIGHT;
-  
-    // smooth follow target (no camera drift)
+
     controls.target.lerp(target, 1 - Math.pow(0.001, dt));
     controls.update();
   }
@@ -599,12 +902,19 @@
     }
   }
 
+  // initial sky/env bake
+  updateSkyAndEnv(0);
+
   function animate(){
     requestAnimationFrame(animate);
     const dt = Math.min(clock.getDelta(), 0.033);
 
     updatePlayer(dt);
     updateCamera(dt);
+
+    // sky/env + clouds
+    updateSkyAndEnv(dt);
+    updateClouds(dt);
 
     const t = clock.elapsedTime;
     for (const s of spots) {
