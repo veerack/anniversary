@@ -33,7 +33,7 @@
       max-height: min(60vh, 520px);
       overflow:auto;
       z-index: 6;
-      background: rgba(10,12,18,0.82);
+      background: rgba(10,12,18,0.86);
       color: rgba(255,255,255,0.92);
       border: 1px solid rgba(255,255,255,0.14);
       border-radius: 18px;
@@ -79,7 +79,6 @@
     <button id="closeBtn">Close</button>
     <h2 id="panelTitle"></h2>
     <p id="panelText"></p>
-    <div id="panelExtra"></div>
   </div>
 
   <div id="footer">Built for us 💙</div>
@@ -102,9 +101,6 @@
 
     // ====== EDIT THESE ======
     const AVATAR_URL = "https://models.readyplayer.me/695c48e31c1817592c4ec48b.glb";
-
-    // Put files here:
-    // assets/anim/Idle.fbx etc
     const ANIMS = {
       Idle: "assets/anim/Idle.fbx",
       Walk: "assets/anim/Walk.fbx",
@@ -113,27 +109,25 @@
     };
 
     const MEMORIES = [
-      { id:"first-meet",  title:"How we met",        text:"Write a short story here.", pos:new THREE.Vector3(-6,0,-4) },
-      { id:"first-date",  title:"First date",        text:"Where did you go? One detail you remember.", pos:new THREE.Vector3(6,0,-2) },
-      { id:"moment",      title:"The moment I knew", text:"One moment that made it clear she’s your person.", pos:new THREE.Vector3(-2,0,7) },
-      { id:"future",      title:"What’s next",       text:"Something you’re excited to do together this year.", pos:new THREE.Vector3(7,0,7) },
+      { id:"first-meet", title:"How we met", text:"Write a short story here.", pos:new THREE.Vector3(-6,0,-4) },
+      { id:"first-date", title:"First date", text:"Where did you go? One detail you remember.", pos:new THREE.Vector3(6,0,-2) },
+      { id:"moment", title:"The moment I knew", text:"One moment that made it clear she’s your person.", pos:new THREE.Vector3(-2,0,7) },
+      { id:"future", title:"What’s next", text:"Something you’re excited to do together this year.", pos:new THREE.Vector3(7,0,7) },
     ];
 
-    // ====== Helpers (important) ======
+    // ====== Helpers ======
     function forceMeshRenderStability(root){
       root.traverse((o) => {
         if (!o.isMesh) return;
-
         o.frustumCulled = false;
         o.visible = true;
         o.castShadow = true;
         o.receiveShadow = true;
 
-        // RPM sometimes uses transparent hair/eyes → depth sorting issues.
-        // Don’t force transparent=false (breaks hair), just make depth sane.
         const mats = Array.isArray(o.material) ? o.material : [o.material];
         for (const m of mats) {
           if (!m) continue;
+          // keep hair/eyes transparency intact, just make depth stable
           m.depthWrite = true;
           m.depthTest = true;
           m.needsUpdate = true;
@@ -141,49 +135,32 @@
       });
     }
 
-    function findBoneByName(root, nameLower) {
-      let found = null;
+    // Mixamo bones are "mixamorigHips". RPM bones are usually "Hips".
+    function normalizeMixamoBoneNames(root) {
       root.traverse((o) => {
-        if (!found && o.isBone && o.name && o.name.toLowerCase() === nameLower) found = o;
+        if (!o.isBone || !o.name) return;
+        if (o.name.startsWith("mixamorig")) {
+          o.name = o.name.replace(/^mixamorig/, "");
+        }
       });
-      return found;
     }
-    
-    function findAnyBone(root) {
-      let found = null;
-      root.traverse((o) => {
-        if (!found && o.isBone) found = o;
-      });
-      return found;
-    }
-    
-    // Works for Mixamo "Without Skin": find mixamorigHips bone, else any bone, then climb to top
-    function findSkeletonRootFromFBX(fbx) {
-      let bone =
-        findBoneByName(fbx, "mixamorighips") ||
-        findBoneByName(fbx, "hips") ||
-        findAnyBone(fbx);
-    
-      if (!bone) return null;
-    
-      while (bone.parent && bone.parent.isBone) bone = bone.parent;
-      return
 
-    function stripRootXZ(clip) {
-      // Keep animations “in place” (prevents drift)
+    function stripRootPosition(clip){
+      // Keep animations "in place" by removing hips/root position tracks
       const tracks = clip.tracks.filter((t) => {
         const n = t.name.toLowerCase();
-        // remove root/hips position
         return !(n.endsWith(".position") && (n.includes("hips") || n.includes("mixamorig")));
       });
       return new THREE.AnimationClip(clip.name, clip.duration, tracks);
     }
 
-    function loadAnimFBX(url, fbxLoader) {
+    function loadAnimFBX(url, loader) {
       return new Promise((resolve, reject) => {
-        fbxLoader.load(url, (fbx) => {
+        loader.load(url, (fbx) => {
           const clip = fbx.animations && fbx.animations[0];
           if (!clip) return reject(new Error("No animation in " + url));
+          // Make bone names compatible (in-memory)
+          normalizeMixamoBoneNames(fbx);
           resolve({ fbx, clip });
         }, undefined, reject);
       });
@@ -197,7 +174,6 @@
     const camera = new THREE.PerspectiveCamera(65, window.innerWidth/window.innerHeight, 0.1, 200);
     camera.position.set(0, 10, 14);
 
-    // IMPORTANT: no alpha:true
     const renderer = new THREE.WebGLRenderer({ antialias:true });
     renderer.setClearColor(0x05060a, 1);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -205,7 +181,6 @@
     renderer.shadowMap.enabled = true;
     app.appendChild(renderer.domElement);
 
-    // Lights
     scene.add(new THREE.HemisphereLight(0xaecbff, 0x1a1d2b, 0.95));
     const dir = new THREE.DirectionalLight(0xffffff, 1.1);
     dir.position.set(12, 18, 10);
@@ -217,7 +192,6 @@
     dir.shadow.camera.bottom = -25;
     scene.add(dir);
 
-    // Ground + walls
     const ground = new THREE.Mesh(
       new THREE.PlaneGeometry(40, 40),
       new THREE.MeshStandardMaterial({ color: 0x0b1020, roughness:0.95, metalness:0 })
@@ -239,7 +213,6 @@
     wall(0.8, 2.5, 40, -20, 1.25, 0);
     wall(0.8, 2.5, 40, 20, 1.25, 0);
 
-    // Props
     const propMat = new THREE.MeshStandardMaterial({ color: 0x1a2250, roughness: 0.8 });
     function pillar(x,z){
       const p = new THREE.Mesh(new THREE.CylinderGeometry(0.6,0.8,3.2,18), propMat);
@@ -261,82 +234,6 @@
     tempCapsule.castShadow = true;
     tempCapsule.position.y = 1.0;
     player.add(tempCapsule);
-
-    // ====== Load avatar + animations ======
-    const gltfLoader = new GLTFLoader();
-    const fbxLoader  = new FBXLoader();
-
-    let avatarRoot = null;
-    let mixer = null;
-    const actions = {};
-    let currentAction = null;
-
-    function playAction(name, fade=0.18){
-      const next = actions[name];
-      if (!next) return;
-      if (currentAction === next) return;
-      if (currentAction) currentAction.fadeOut(fade);
-      currentAction = next;
-      currentAction.reset().fadeIn(fade).play();
-    }
-
-    async function setupAvatarAndAnims() {
-      const gltf = await new Promise((resolve, reject) => {
-        gltfLoader.load(AVATAR_URL, resolve, undefined, reject);
-      });
-
-      avatarRoot = gltf.scene;
-      forceMeshRenderStability(avatarRoot);
-
-      avatarRoot.position.set(0,0,0);
-      avatarRoot.rotation.set(0,0,0);
-      avatarRoot.scale.set(1,1,1);
-
-      player.add(avatarRoot);
-      player.remove(tempCapsule);
-
-      mixer = new THREE.AnimationMixer(avatarRoot);
-
-      const [idle, walk, run, jump] = await Promise.all([
-        loadAnimFBX(ANIMS.Idle, fbxLoader),
-        loadAnimFBX(ANIMS.Walk, fbxLoader),
-        loadAnimFBX(ANIMS.Run,  fbxLoader),
-        loadAnimFBX(ANIMS.Jump, fbxLoader),
-      ]);
-
-      function makeAction(name, pack) {
-        const srcRoot =
-          findBoneByName(pack.fbx, "mixamorighips") ||
-          findBoneByName(pack.fbx, "hips") ||
-          findSkeletonRootFromFBX(pack.fbx);
-        if (!srcRoot) throw new Error("FBX has no skinned skeleton: " + name);
-
-        const srcClip = stripRootXZ(pack.clip);
-
-        const retargeted = SkeletonUtils.retargetClip(
-          avatarRoot,   // target
-          srcRoot,      // source bone root
-          srcClip,
-          { preserveMatrix: false }
-        );
-
-        const a = mixer.clipAction(retargeted);
-        a.enabled = true;
-        a.clampWhenFinished = true;
-        a.loop = (name === "Jump") ? THREE.LoopOnce : THREE.LoopRepeat;
-        return a;
-      }
-
-      actions.Idle = makeAction("Idle", idle);
-      actions.Walk = makeAction("Walk", walk);
-      actions.Run  = makeAction("Run",  run);
-      actions.Jump = makeAction("Jump", jump);
-
-      console.log("Animations ready:", Object.keys(actions));
-      playAction("Idle", 0.0);
-    }
-
-    setupAvatarAndAnims().catch((e) => console.error("Avatar/anims failed:", e));
 
     // ====== Camera controls ======
     const controls = new OrbitControls(camera, renderer.domElement);
@@ -382,10 +279,7 @@
     const panel = document.getElementById("panel");
     const panelTitle = document.getElementById("panelTitle");
     const panelText = document.getElementById("panelText");
-    document.getElementById("closeBtn").onclick = () => {
-      panel.style.display = "none";
-      activeSpotId = null;
-    };
+    document.getElementById("closeBtn").onclick = () => { panel.style.display = "none"; activeSpotId = null; };
 
     let activeSpotId = null;
     function openMemory(mem){
@@ -395,6 +289,87 @@
       panel.style.display = "block";
     }
 
+    // ====== Load avatar + animations (fixed retarget) ======
+    const gltfLoader = new GLTFLoader();
+    const fbxLoader  = new FBXLoader();
+
+    let avatarRoot = null;
+    let mixer = null;
+    const actions = {};
+    let currentAction = null;
+
+    function playAction(name, fade=0.18){
+      const next = actions[name];
+      if (!next) return;
+      if (currentAction === next) return;
+      if (currentAction) currentAction.fadeOut(fade);
+      currentAction = next;
+      currentAction.reset().fadeIn(fade).play();
+    }
+
+    async function setupAvatarAndAnims() {
+      const gltf = await new Promise((resolve, reject) => {
+        gltfLoader.load(AVATAR_URL, resolve, undefined, reject);
+      });
+
+      avatarRoot = gltf.scene;
+      forceMeshRenderStability(avatarRoot);
+
+      avatarRoot.position.set(0,0,0);
+      avatarRoot.rotation.set(0,0,0);
+      avatarRoot.scale.set(1,1,1);
+
+      player.add(avatarRoot);
+      player.remove(tempCapsule);
+
+      mixer = new THREE.AnimationMixer(avatarRoot);
+
+      const packs = await Promise.all([
+        loadAnimFBX(ANIMS.Idle, fbxLoader),
+        loadAnimFBX(ANIMS.Walk, fbxLoader),
+        loadAnimFBX(ANIMS.Run,  fbxLoader),
+        loadAnimFBX(ANIMS.Jump, fbxLoader),
+      ]);
+
+      const byName = { Idle:packs[0], Walk:packs[1], Run:packs[2], Jump:packs[3] };
+
+      function makeAction(name) {
+        const pack = byName[name];
+        const srcClip = stripRootPosition(pack.clip);
+
+        // KEY FIX:
+        // source = whole fbx (contains bone hierarchy)
+        // target = avatarRoot
+        const retargeted = SkeletonUtils.retargetClip(
+          avatarRoot,
+          pack.fbx,
+          srcClip,
+          {
+            preserveMatrix: false,
+            useFirstFramePosition: true
+          }
+        );
+
+        const a = mixer.clipAction(retargeted);
+        a.enabled = true;
+        a.clampWhenFinished = true;
+        a.loop = (name === "Jump") ? THREE.LoopOnce : THREE.LoopRepeat;
+        return a;
+      }
+
+      actions.Idle = makeAction("Idle");
+      actions.Walk = makeAction("Walk");
+      actions.Run  = makeAction("Run");
+      actions.Jump = makeAction("Jump");
+
+      actions.Jump.clampWhenFinished = true;
+
+      console.log("Animations ready:", Object.keys(actions));
+      playAction("Idle", 0.0);
+    }
+
+    setupAvatarAndAnims().catch((e) => console.error("Avatar/anims failed:", e));
+
     // ====== Movement + animation switching ======
     const keys = new Set();
     let isJumping = false;
@@ -403,11 +378,10 @@
     window.addEventListener("keydown", (e) => {
       const k = e.key.toLowerCase();
       keys.add(k);
-
-      if ((k === " " || k === "spacebar") && !isJumping && jumpCooldown <= 0) {
+      if (k === " " && !isJumping && jumpCooldown <= 0) {
         isJumping = true;
         jumpCooldown = 0.65;
-        playAction("Jump", 0.05);
+        playAction("Jump", 0.06);
       }
     });
     window.addEventListener("keyup", (e) => keys.delete(e.key.toLowerCase()));
@@ -427,8 +401,8 @@
       let forward = 0, right = 0;
       if (keys.has("w")) forward += 1;
       if (keys.has("s")) forward -= 1;
-      if (keys.has("d")) right += 1;
-      if (keys.has("a")) right -= 1;
+      if (keys.has("d")) right -= 1;
+      if (keys.has("a")) right += 1;
 
       const yaw = controls.getAzimuthalAngle();
 
