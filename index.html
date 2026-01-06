@@ -214,102 +214,82 @@
     function forceMeshRenderStability(root){
       root.traverse((o) => {
         if (o.isMesh) {
+          o.frustumCulled = false;
+          o.visible = true;
           o.castShadow = true;
           o.receiveShadow = true;
-          o.frustumCulled = false;     // FIX: stop bounds culling issues
-          o.visible = true;
-
-          // FIX: RPM often uses transparent materials (hair/eyes/lashes).
-          // This avoids "flash then vanish" depth-sorting bugs.
+    
           const mats = Array.isArray(o.material) ? o.material : [o.material];
           for (const m of mats) {
             if (!m) continue;
-            m.transparent = false;
+            // keep transparency only where needed, but fix depth sorting:
             m.depthWrite = true;
             m.depthTest = true;
             m.needsUpdate = true;
           }
+          o.renderOrder = 0;
         }
       });
     }
 
-    function loadAnimFBX(url){
+    function loadFBXClip(url) {
       return new Promise((resolve, reject) => {
         fbxLoader.load(url, (fbx) => {
           const clip = fbx.animations && fbx.animations[0];
           if (!clip) return reject(new Error("No animation in " + url));
-          resolve({ fbx, clip });
+          clip.name = (clip.name && clip.name.trim()) ? clip.name : url.split("/").pop();
+          resolve(clip);
         }, undefined, reject);
       });
     }
-
+    
     gltfLoader.load(AVATAR_URL, async (gltf) => {
       avatarRoot = gltf.scene;
-
-      // Stabilize rendering
+    
+      // Keep your "make it visible" fixes:
       forceMeshRenderStability(avatarRoot);
-
-      // Ensure sane transforms
+    
       avatarRoot.position.set(0,0,0);
       avatarRoot.rotation.set(0,0,0);
       avatarRoot.scale.set(1,1,1);
-
-      // DEBUG: force geometry to be visible no matter what (ignore textures/transparency)
-      avatarRoot.traverse((o) => {
-        if (o.isMesh) {
-          o.frustumCulled = false;
-          o.castShadow = false;
-          o.receiveShadow = false;
-          o.material = new THREE.MeshNormalMaterial(); // <-- impossible to be invisible unless not rendered
-          o.visible = true;
-        }
-      });
-
+    
       player.add(avatarRoot);
-
-      // DEBUG: show bounding box even if mesh/materials are broken
-      const box = new THREE.BoxHelper(avatarRoot, 0xff0000);
-      box.frustumCulled = false;
-      scene.add(box);
-      
-      // keep updating it
-      window.__avatarBox = box;
-      window.__avatarRoot = avatarRoot;
-      
       player.remove(tempCapsule);
-
+    
       mixer = new THREE.AnimationMixer(avatarRoot);
-
-      try{
-        // Load the Mixamo animation sources
-        const [idle, walk, run, jump] = await Promise.all([
-          loadAnimFBX(ANIMS.Idle),
-          loadAnimFBX(ANIMS.Walk),
-          loadAnimFBX(ANIMS.Run),
-          loadAnimFBX(ANIMS.Jump),
+    
+      try {
+        const [idleClip, walkClip, runClip, jumpClip] = await Promise.all([
+          loadFBXClip(ANIMS.Idle),
+          loadFBXClip(ANIMS.Walk),
+          loadFBXClip(ANIMS.Run),
+          loadFBXClip(ANIMS.Jump),
         ]);
-
-        // Retarget clips to avatar using SkeletonUtils (more reliable than name-matching)
-        const idleClip = SkeletonUtils.retargetClip(avatarRoot, idle.fbx, idle.clip, { preserveMatrix: false });
-        const walkClip = SkeletonUtils.retargetClip(avatarRoot, walk.fbx, walk.clip, { preserveMatrix: false });
-        const runClip  = SkeletonUtils.retargetClip(avatarRoot, run.fbx,  run.clip,  { preserveMatrix: false });
-        const jumpClip = SkeletonUtils.retargetClip(avatarRoot, jump.fbx, jump.clip, { preserveMatrix: false });
-
-        actions.Idle = mixer.clipAction(idleClip);
-        actions.Walk = mixer.clipAction(walkClip);
-        actions.Run  = mixer.clipAction(runClip);
-        actions.Jump = mixer.clipAction(jumpClip);
-
+    
+        // IMPORTANT: make “in-place” by killing root translation on X/Z
+        function stripXZ(clip) {
+          const tracks = clip.tracks.filter((t) => {
+            const n = t.name.toLowerCase();
+            // Remove position tracks for hips/root to prevent drifting
+            return !(n.endsWith(".position") && (n.includes("hips") || n.includes("mixamorig")));
+          });
+          return new THREE.AnimationClip(clip.name, clip.duration, tracks);
+        }
+    
+        actions.Idle = mixer.clipAction(stripXZ(idleClip));
+        actions.Walk = mixer.clipAction(stripXZ(walkClip));
+        actions.Run  = mixer.clipAction(stripXZ(runClip));
+        actions.Jump = mixer.clipAction(stripXZ(jumpClip));
+    
         actions.Jump.loop = THREE.LoopOnce;
         actions.Jump.clampWhenFinished = true;
-
+    
         console.log("Animations ready:", Object.keys(actions));
         playAction("Idle", 0.0);
-
-      } catch (e){
-        console.error("Animation load/retarget failed:", e);
+      } catch (e) {
+        console.error("Animation load failed:", e);
       }
-
+    
     }, undefined, (e) => console.error("Avatar load failed:", e));
 
     // ====== Camera controls ======
