@@ -137,6 +137,7 @@
   const MAP_RADIUS = 55;
   const TERRAIN_SIZE = 120;
   const TERRAIN_SEG = 140; // 120..200 ok
+  let grassWindAccum = 0;
 
   // ====== Small utilities ======
 
@@ -324,7 +325,7 @@
     const sunPos = new THREE.Vector3().setFromSphericalCoords(1, phi, th);
     sky.material.uniforms.sunPosition.value.copy(sunPos);
   
-    sunLight.position.copy(sunPos).multiplyScalar(120);
+    // keep only sky sun position for visuals
     moonLight.position.copy(sunPos).multiplyScalar(-120);
   
     const dayFactor = THREE.MathUtils.clamp((elevation + 6) / 18, 0, 1);
@@ -695,19 +696,6 @@
   }
   
   // ====== Walls / props ======
-  const wallMat = new THREE.MeshStandardMaterial({ color: 0x111634, roughness: 0.95, metalness: 0.0, envMapIntensity: 0.25 });
-  function wall(w,h,d,x,y,z){
-    const m = new THREE.Mesh(new THREE.BoxGeometry(w,h,d), wallMat);
-    m.position.set(x,y,z);
-    m.castShadow = true; m.receiveShadow = true;
-    scene.add(m);
-    return m;
-  }
-  wall(40, 2.5, 0.8, 0, 1.25, -20);
-  wall(40, 2.5, 0.8, 0, 1.25, 20);
-  wall(0.8, 2.5, 40, -20, 1.25, 0);
-  wall(0.8, 2.5, 40,  20, 1.25, 0);
-
   const propMat = new THREE.MeshStandardMaterial({ color: 0x1a2250, roughness: 0.75, metalness: 0.12, envMapIntensity: 0.55 });
   function pillar(x,z){
     const p = new THREE.Mesh(new THREE.CylinderGeometry(0.6,0.8,3.2,18), propMat);
@@ -1157,7 +1145,12 @@
     // sky/env + clouds
     updateSkyAndEnv(dt);
     updateClouds(dt);
-    updateGrassWind(clock.elapsedTime);
+    
+    grassWindAccum += dt;
+    if (grassWindAccum >= 1/30) {          // update wind at 30 Hz (not every frame)
+      updateGrassWind(clock.elapsedTime);
+      grassWindAccum = 0;
+    }
 
     const t = clock.elapsedTime;
     for (const s of spots) {
