@@ -1265,37 +1265,37 @@
   function animate(){
     requestAnimationFrame(animate);
     const dt = Math.min(clock.getDelta(), 0.033);
-
+  
     updatePlayer(dt);
-
+  
     const moving = keys.has("w") || keys.has("a") || keys.has("s") || keys.has("d");
+  
+    // wind audio
     const windBase = 0.45 + 0.35 * Math.sin(clock.elapsedTime * 0.15);
     const windMove = moving ? 0.35 : 0.0;
     setWindStrength(THREE.MathUtils.clamp(windBase + windMove, 0, 1));
-    
+  
     updateCamera(dt);
     updateClouds(dt, clock.elapsedTime);
-
+  
+    // grass uniforms
     grassField.mat.uniforms.uTime.value = clock.elapsedTime;
     grassField.mat.uniforms.uPlayerPos.value.copy(player.position);
-    
-    // stronger wind when moving
-    const moving = keys.has("w") || keys.has("a") || keys.has("s") || keys.has("d");
     grassField.mat.uniforms.uWindStrength.value = moving ? 1.15 : 0.85;
-
+  
     const t = clock.elapsedTime;
     for (const s of spots) {
       s.ring.rotation.z = t * 0.7;
       s.marker.position.y = 1.35 + Math.sin(t * 2.2 + s.mem.pos.x) * 0.08;
     }
-
+  
     if (mixer) mixer.update(dt);
     checkMemoryTriggers();
-
+  
     renderer.render(scene, camera);
   }
   animate();
-
+  
   window.addEventListener("resize", () => {
     camera.aspect = window.innerWidth / window.innerHeight;
     camera.updateProjectionMatrix();
