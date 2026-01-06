@@ -270,7 +270,7 @@
   
   sunLight.shadow.mapSize.set(4096, 4096);
   
-  const SHADOW_BOX = 70;
+  const SHADOW_BOX = 55;
   sunLight.shadow.camera.far = 220;
   sunLight.shadow.camera.near = 1;
   sunLight.shadow.camera.left   = -SHADOW_BOX;
@@ -278,11 +278,17 @@
   sunLight.shadow.camera.top    =  SHADOW_BOX;
   sunLight.shadow.camera.bottom = -SHADOW_BOX;
   
-  sunLight.shadow.bias = -0.00025;
-  sunLight.shadow.normalBias = 0.02;
+  sunLight.intensity = 2.6;        // keep
+  sunLight.shadow.bias = -0.00005; // less aggressive than -0.00025
+  sunLight.shadow.normalBias = 0.01;
   
   scene.add(sunLight);
 
+  const fill = new THREE.DirectionalLight(0xffffff, 0.35);
+  fill.position.set(-40, 60, -30);
+  fill.castShadow = false;
+  scene.add(fill);
+  
   const sunTarget = new THREE.Object3D();
   scene.add(sunTarget);
   sunLight.target = sunTarget;
@@ -290,10 +296,10 @@
   const moonLight = new THREE.DirectionalLight(0xbfd6ff, 0.35);
   scene.add(moonLight);
 
-  const hemi = new THREE.HemisphereLight(0xbfdcff, 0x05060a, 0.35);
+  const hemi = new THREE.HemisphereLight(0xcfe8ff, 0x243018, 0.9);
   scene.add(hemi);
   
-  scene.add(new THREE.AmbientLight(0xffffff, 0.08));
+  scene.add(new THREE.AmbientLight(0xffffff, 0.18));
 
   const pmrem = new THREE.PMREMGenerator(renderer);
 
@@ -532,10 +538,13 @@
   terrainGeo.computeVertexNormals();
   
   const terrainMat = new THREE.MeshStandardMaterial({
-    color: 0x2b5a2d,
-    roughness: 0.95,
+    map: grassMap,
+    normalMap: grassNormal,
+    roughnessMap: grassRough,
+    color: 0xffffff,        // IMPORTANT: don’t tint dark if you’re using an albedo map
+    roughness: 1.0,
     metalness: 0.0,
-    envMapIntensity: 0.03, // keep low to avoid wash
+    envMapIntensity: 0.08,
   });
   
   const ground = new THREE.Mesh(terrainGeo, terrainMat);
