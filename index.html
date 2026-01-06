@@ -719,8 +719,8 @@
 
   (async () => {
     try {
-      await addGLB({ url:"assets/models/car.glb",   x: 18, z:-14, rot:1.2,  scale:1.0, yOffset:0.0 });
-      await addGLB({ url:"assets/models/bench.glb", x:-14, z: -8, rot:-0.4, scale:1.0, yOffset:0.0 });
+      await addGLB({ url:"assets/models/Taxi.glb",   x: 18, z:-14, rot:1.2,  scale:1.0, yOffset:0.0 });
+      await addGLB({ url:"assets/models/SchoolBus.glb", x:-14, z: -8, rot:-0.4, scale:1.0, yOffset:0.0 });
     } catch (e) {
       console.error("GLB spawn failed:", e);
     }
@@ -790,8 +790,8 @@
       addRock(x, z, 0.6 + Math.random() * 1.3);
     }
 
-    await addGLB({ url:"assets/models/car.glb",   x: 18, z:-14, rot:1.2, scale:1.0, yOffset:0.0 });
-    await addGLB({ url:"assets/models/bench.glb", x:-14, z: -8, rot:-0.4, scale:1.0, yOffset:0.0 });
+    await addGLB({ url:"assets/models/Taxi.glb",   x: 18, z:-14, rot:1.2, scale:1.0, yOffset:0.0 });
+    await addGLB({ url:"assets/models/SchoolBus.glb", x:-14, z: -8, rot:-0.4, scale:1.0, yOffset:0.0 });
 
     const pathMat = new THREE.MeshStandardMaterial({ color: 0x3a3a2f, roughness: 1, metalness: 0, envMapIntensity: 0.0 });
     for (let i = 0; i < 26; i++) {
