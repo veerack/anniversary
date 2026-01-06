@@ -20,10 +20,11 @@
       border-radius: 12px;
       backdrop-filter: blur(8px);
       border: 1px solid rgba(255,255,255,0.12);
-      max-width: 360px;
+      max-width: 380px;
     }
     #hint { opacity:0.85; margin-top:6px; font-size:13px; }
 
+    /* Center memory popup */
     #panel{
       position: fixed;
       left: 50%;
@@ -97,7 +98,6 @@
     import { OrbitControls } from "three/addons/controls/OrbitControls.js";
     import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
     import { FBXLoader } from "three/addons/loaders/FBXLoader.js";
-    import * as SkeletonUtils from "three/addons/utils/SkeletonUtils.js";
 
     // ====== EDIT THESE ======
     const AVATAR_URL = "https://models.readyplayer.me/695c48e31c1817592c4ec48b.glb";
@@ -115,8 +115,84 @@
       { id:"future", title:"What’s next", text:"Something you’re excited to do together this year.", pos:new THREE.Vector3(7,0,7) },
     ];
 
-    // ====== Helpers ======
-    function forceMeshRenderStability(root){
+    // ====== Small utilities ======
+    function normalizeKey(name) {
+      // Normalize both RPM and Mixamo-ish strings into the same key.
+      // Examples:
+      // "mixamorigLeftHandMiddle3" -> "lefthandmiddle3"
+      // "LeftHandMiddle3"          -> "lefthandmiddle3"
+      return String(name || "")
+        .replace(/^Armature\|/i, "")
+        .replace(/^mixamorig/i, "")
+        .replace(/[^a-z0-9]/gi, "")
+        .toLowerCase();
+    }
+
+    function buildBoneKeyToNameMap(root) {
+      const map = new Map();
+      root.traverse((o) => {
+        if (!o.isBone) return;
+        const key = normalizeKey(o.name);
+        if (key && !map.has(key)) map.set(key, o.name);
+      });
+      return map;
+    }
+
+    function stripRootTranslation(clip) {
+      // Remove any position tracks for root/hips to prevent drifting.
+      const tracks = clip.tracks.filter((t) => {
+        const nm = t.name.toLowerCase();
+        if (!nm.endsWith(".position")) return true;
+        // Kill all root translations (safest for our manual movement)
+        return false;
+      });
+      return new THREE.AnimationClip(clip.name, clip.duration, tracks);
+    }
+
+    function remapClipToAvatarBones(clip, avatarRoot, debugLabel) {
+      const boneMap = buildBoneKeyToNameMap(avatarRoot);
+
+      const outTracks = [];
+      let mapped = 0, skipped = 0;
+
+      for (const tr of clip.tracks) {
+        const parts = tr.name.split(".");
+        if (parts.length < 2) { skipped++; continue; }
+
+        const srcNode = parts[0];
+        const prop = parts.slice(1).join("."); // "quaternion" or "position" etc.
+        const key = normalizeKey(srcNode);
+        const dstBoneName = boneMap.get(key);
+
+        if (!dstBoneName) { skipped++; continue; }
+
+        // We already removed all .position tracks, so mainly quaternion tracks remain.
+        const dstTrackName = `${dstBoneName}.${prop}`;
+
+        const times = tr.times.slice();
+        const values = tr.values.slice();
+
+        if (tr.ValueTypeName === "quaternion") {
+          outTracks.push(new THREE.QuaternionKeyframeTrack(dstTrackName, times, values));
+          mapped++;
+        } else if (tr.ValueTypeName === "vector") {
+          outTracks.push(new THREE.VectorKeyframeTrack(dstTrackName, times, values));
+          mapped++;
+        } else {
+          skipped++;
+        }
+      }
+
+      // If we mapped basically nothing, this animation won’t work on this rig.
+      if (mapped < 10) {
+        console.warn(`[${debugLabel}] Too few mapped tracks (${mapped}). This FBX likely targets a different rig.`);
+      }
+
+      // Keep same duration/name
+      return new THREE.AnimationClip(clip.name || debugLabel, clip.duration, outTracks);
+    }
+
+    function forceMeshVisible(root) {
       root.traverse((o) => {
         if (!o.isMesh) return;
         o.frustumCulled = false;
@@ -127,82 +203,20 @@
         const mats = Array.isArray(o.material) ? o.material : [o.material];
         for (const m of mats) {
           if (!m) continue;
-          // keep hair/eyes transparency intact, just make depth stable
+          // Don’t kill transparency (hair/eyes), just stabilize depth.
+          m.depthWrite = true;
           m.depthTest = true;
-          // DO NOT force depthWrite=true for all transparent materials — it can erase parts.
-          // For opaque, depthWrite should be true; for transparent, keep default unless needed.
-          if (!m.transparent) m.depthWrite = true;
           m.needsUpdate = true;
         }
-      });
-    }
-
-    function findFirstSkinnedMesh(root){
-      let found = null;
-      root.traverse((o) => {
-        if (!found && o.isSkinnedMesh && o.skeleton && o.skeleton.bones && o.skeleton.bones.length) {
-          found = o;
-        }
-      });
-      return found;
-    }
-
-    // Mixamo bones are "mixamorigHips". RPM bones are usually "Hips".
-    // SkeletonUtils matches by bone names, so we strip "mixamorig" prefix.
-    function normalizeMixamoBoneNames(root) {
-      root.traverse((o) => {
-        if (!o.isBone || !o.name) return;
-        if (o.name.startsWith("mixamorig")) o.name = o.name.replace(/^mixamorig/, "");
-      });
-    }
-
-    // Keep animation in place by zeroing X/Z of hips position, but KEEP Y (jump uses it).
-    function stripRootXZ_keepY(clip){
-      const tracks = clip.tracks.map((t) => {
-        const n = t.name.toLowerCase();
-        if (!n.endsWith(".position")) return t;
-
-        // only for hips/root tracks
-        const isHips =
-          n.includes("hips.position") ||
-          n.includes("mixamorig") ||
-          n.includes("armature") ||
-          n.includes("root");
-
-        if (!isHips) return t;
-
-        const values = t.values.slice();
-        for (let i = 0; i < values.length; i += 3) {
-          values[i + 0] = 0; // X
-          values[i + 2] = 0; // Z
-          // keep Y
-        }
-        return new THREE.VectorKeyframeTrack(t.name, t.times, values);
-      });
-
-      return new THREE.AnimationClip(clip.name, clip.duration, tracks);
-    }
-
-    function loadAnimFBX(url, loader) {
-      return new Promise((resolve, reject) => {
-        loader.load(url, (fbx) => {
-          const clip = fbx.animations && fbx.animations[0];
-          if (!clip) return reject(new Error("No animation in " + url));
-
-          // Make bone names compatible (in-memory only)
-          normalizeMixamoBoneNames(fbx);
-
-          resolve({ fbx, clip });
-        }, undefined, reject);
       });
     }
 
     // ====== Scene setup ======
     const app = document.getElementById("app");
     const scene = new THREE.Scene();
-    scene.fog = new THREE.Fog(0x05060a, 10, 55);
+    scene.fog = new THREE.Fog(0x05060a, 12, 70);
 
-    const camera = new THREE.PerspectiveCamera(65, window.innerWidth/window.innerHeight, 0.1, 200);
+    const camera = new THREE.PerspectiveCamera(65, window.innerWidth / window.innerHeight, 0.1, 250);
     camera.position.set(0, 10, 14);
 
     const renderer = new THREE.WebGLRenderer({ antialias:true });
@@ -212,25 +226,69 @@
     renderer.shadowMap.enabled = true;
     app.appendChild(renderer.domElement);
 
+    // Lights
     scene.add(new THREE.HemisphereLight(0xaecbff, 0x1a1d2b, 0.95));
-    const dir = new THREE.DirectionalLight(0xffffff, 1.1);
+    const dir = new THREE.DirectionalLight(0xffffff, 1.15);
     dir.position.set(12, 18, 10);
     dir.castShadow = true;
     dir.shadow.mapSize.set(1024, 1024);
-    dir.shadow.camera.left = -25;
-    dir.shadow.camera.right = 25;
-    dir.shadow.camera.top = 25;
-    dir.shadow.camera.bottom = -25;
+    dir.shadow.camera.left = -30;
+    dir.shadow.camera.right = 30;
+    dir.shadow.camera.top = 30;
+    dir.shadow.camera.bottom = -30;
     scene.add(dir);
 
+    // Procedural "grass" texture (no external files)
+    function makeGrassTexture() {
+      const c = document.createElement("canvas");
+      c.width = 256; c.height = 256;
+      const g = c.getContext("2d");
+
+      g.fillStyle = "#0b1a10";
+      g.fillRect(0,0,c.width,c.height);
+
+      for (let i=0;i<5000;i++){
+        const x = (Math.random()*c.width)|0;
+        const y = (Math.random()*c.height)|0;
+        const v = 35 + (Math.random()*60)|0;
+        g.fillStyle = `rgb(${8},${v},${20})`;
+        g.fillRect(x,y,1,1);
+      }
+
+      for (let i=0;i<200;i++){
+        const x = Math.random()*c.width;
+        const y = Math.random()*c.height;
+        const r = 2 + Math.random()*6;
+        g.globalAlpha = 0.08;
+        g.fillStyle = "#89ffb0";
+        g.beginPath();
+        g.arc(x,y,r,0,Math.PI*2);
+        g.fill();
+      }
+      g.globalAlpha = 1;
+
+      const tex = new THREE.CanvasTexture(c);
+      tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+      tex.repeat.set(8,8);
+      tex.anisotropy = Math.min(renderer.capabilities.getMaxAnisotropy(), 8);
+      tex.needsUpdate = true;
+      return tex;
+    }
+
     const ground = new THREE.Mesh(
-      new THREE.PlaneGeometry(40, 40),
-      new THREE.MeshStandardMaterial({ color: 0x0b1020, roughness:0.95, metalness:0 })
+      new THREE.PlaneGeometry(60, 60),
+      new THREE.MeshStandardMaterial({
+        map: makeGrassTexture(),
+        color: 0xffffff,
+        roughness: 0.95,
+        metalness: 0
+      })
     );
     ground.rotation.x = -Math.PI/2;
     ground.receiveShadow = true;
     scene.add(ground);
 
+    // Walls / boundaries
     const wallMat = new THREE.MeshStandardMaterial({ color: 0x111634, roughness: 0.9 });
     function wall(w,h,d,x,y,z){
       const m = new THREE.Mesh(new THREE.BoxGeometry(w,h,d), wallMat);
@@ -242,8 +300,9 @@
     wall(40, 2.5, 0.8, 0, 1.25, -20);
     wall(40, 2.5, 0.8, 0, 1.25, 20);
     wall(0.8, 2.5, 40, -20, 1.25, 0);
-    wall(0.8, 2.5, 40, 20, 1.25, 0);
+    wall(0.8, 2.5, 40,  20, 1.25, 0);
 
+    // Props
     const propMat = new THREE.MeshStandardMaterial({ color: 0x1a2250, roughness: 0.8 });
     function pillar(x,z){
       const p = new THREE.Mesh(new THREE.CylinderGeometry(0.6,0.8,3.2,18), propMat);
@@ -253,20 +312,12 @@
     }
     pillar(-10,10); pillar(10,-10); pillar(0,0);
 
-    // ====== Player container ======
+    // Player container
     const player = new THREE.Group();
     player.position.set(0,0,8);
     scene.add(player);
 
-    const tempCapsule = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.55, 0.55, 1.8, 16),
-      new THREE.MeshStandardMaterial({ color:0x9fb6ff, roughness:0.35, metalness:0.1 })
-    );
-    tempCapsule.castShadow = true;
-    tempCapsule.position.y = 1.0;
-    player.add(tempCapsule);
-
-    // ====== Camera controls ======
+    // Camera controls
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
     controls.enablePan = false;
@@ -275,7 +326,7 @@
     controls.maxPolarAngle = Math.PI * 0.49;
     controls.target.copy(player.position).add(new THREE.Vector3(0, 1.2, 0));
 
-    // ====== Memory spots ======
+    // Memory spots
     const spots = [];
     const spotGeo = new THREE.TorusGeometry(1.0, 0.12, 16, 50);
     const glowMat = new THREE.MeshStandardMaterial({
@@ -306,7 +357,7 @@
       spots.push({ mem, ring, marker });
     }
 
-    // ====== UI panel ======
+    // UI
     const panel = document.getElementById("panel");
     const panelTitle = document.getElementById("panelTitle");
     const panelText = document.getElementById("panelText");
@@ -320,7 +371,7 @@
       panel.style.display = "block";
     }
 
-    // ====== Load avatar + animations (CORRECT retarget) ======
+    // ====== Avatar + Animations (WORKING METHOD) ======
     const gltfLoader = new GLTFLoader();
     const fbxLoader  = new FBXLoader();
 
@@ -333,73 +384,58 @@
       const next = actions[name];
       if (!next) return;
       if (currentAction === next) return;
+
       if (currentAction) currentAction.fadeOut(fade);
       currentAction = next;
       currentAction.reset().fadeIn(fade).play();
     }
 
-    async function setupAvatarAndAnims() {
+    function loadFBX(url){
+      return new Promise((resolve, reject) => {
+        fbxLoader.load(url, (fbx) => {
+          const clip = fbx.animations && fbx.animations[0];
+          if (!clip) return reject(new Error("No animation in " + url));
+          resolve(clip);
+        }, undefined, reject);
+      });
+    }
+
+    async function setupAvatarAndAnims(){
       const gltf = await new Promise((resolve, reject) => {
         gltfLoader.load(AVATAR_URL, resolve, undefined, reject);
       });
 
       avatarRoot = gltf.scene;
-      forceMeshRenderStability(avatarRoot);
+      forceMeshVisible(avatarRoot);
 
-      // Make sure avatar is visible and positioned
+      // Make sure it’s actually on the ground
       avatarRoot.position.set(0,0,0);
       avatarRoot.rotation.set(0,0,0);
       avatarRoot.scale.set(1,1,1);
 
       player.add(avatarRoot);
-      player.remove(tempCapsule);
-
-      const targetSkinned = findFirstSkinnedMesh(avatarRoot);
-      if (!targetSkinned) throw new Error("RPM avatar has no SkinnedMesh (unexpected).");
 
       mixer = new THREE.AnimationMixer(avatarRoot);
 
-      const [idle, walk, run, jump] = await Promise.all([
-        loadAnimFBX(ANIMS.Idle, fbxLoader),
-        loadAnimFBX(ANIMS.Walk, fbxLoader),
-        loadAnimFBX(ANIMS.Run,  fbxLoader),
-        loadAnimFBX(ANIMS.Jump, fbxLoader),
+      const [idleRaw, walkRaw, runRaw, jumpRaw] = await Promise.all([
+        loadFBX(ANIMS.Idle),
+        loadFBX(ANIMS.Walk),
+        loadFBX(ANIMS.Run),
+        loadFBX(ANIMS.Jump),
       ]);
 
-      const packs = { Idle: idle, Walk: walk, Run: run, Jump: jump };
+      const idle = remapClipToAvatarBones(stripRootTranslation(idleRaw), avatarRoot, "Idle");
+      const walk = remapClipToAvatarBones(stripRootTranslation(walkRaw), avatarRoot, "Walk");
+      const run  = remapClipToAvatarBones(stripRootTranslation(runRaw),  avatarRoot, "Run");
+      const jump = remapClipToAvatarBones(stripRootTranslation(jumpRaw), avatarRoot, "Jump");
 
-      function makeAction(name) {
-        const pack = packs[name];
+      actions.Idle = mixer.clipAction(idle);
+      actions.Walk = mixer.clipAction(walk);
+      actions.Run  = mixer.clipAction(run);
+      actions.Jump = mixer.clipAction(jump);
 
-        // SOURCE MUST BE A SKINNED MESH
-        const sourceSkinned = findFirstSkinnedMesh(pack.fbx);
-        if (!sourceSkinned) {
-          throw new Error(`FBX "${name}" has no SkinnedMesh. Re-download from Mixamo as "With Skin".`);
-        }
-
-        const clipInPlace = stripRootXZ_keepY(pack.clip);
-
-        // CORRECT CALL: (targetSkinnedMesh, sourceSkinnedMesh, clip)
-        const retargeted = SkeletonUtils.retargetClip(
-          targetSkinned,
-          sourceSkinned,
-          clipInPlace,
-          { preserveMatrix: false }
-        );
-
-        retargeted.name = name;
-
-        const a = mixer.clipAction(retargeted);
-        a.enabled = true;
-        a.clampWhenFinished = true;
-        a.loop = (name === "Jump") ? THREE.LoopOnce : THREE.LoopRepeat;
-        return a;
-      }
-
-      actions.Idle = makeAction("Idle");
-      actions.Walk = makeAction("Walk");
-      actions.Run  = makeAction("Run");
-      actions.Jump = makeAction("Jump");
+      actions.Jump.loop = THREE.LoopOnce;
+      actions.Jump.clampWhenFinished = true;
 
       console.log("Animations ready:", Object.keys(actions));
       playAction("Idle", 0.0);
@@ -415,7 +451,8 @@
     window.addEventListener("keydown", (e) => {
       const k = e.key.toLowerCase();
       keys.add(k);
-      if (k === " " && !isJumping && jumpCooldown <= 0) {
+
+      if ((k === " " || k === "spacebar") && !isJumping && jumpCooldown <= 0) {
         isJumping = true;
         jumpCooldown = 0.65;
         playAction("Jump", 0.06);
@@ -432,18 +469,18 @@
     }
 
     function updatePlayer(dt){
-      const running = keys.has("shift");
-      const speed = running ? 6.2 : 4.2;
+      const isRunning = keys.has("shift");
+      const speed = isRunning ? 6.2 : 4.2;
 
       let forward = 0, right = 0;
       if (keys.has("w")) forward += 1;
       if (keys.has("s")) forward -= 1;
-      if (keys.has("d")) right -= 1;
-      if (keys.has("a")) right += 1;
+      if (keys.has("d")) right += 1;
+      if (keys.has("a")) right -= 1;
 
       const yaw = controls.getAzimuthalAngle();
 
-      // Forward vector based on camera yaw
+      // ✅ Correct directions: W forward, S backward relative to camera yaw
       const dirF = new THREE.Vector3(-Math.sin(yaw), 0, -Math.cos(yaw)).normalize();
       const dirR = new THREE.Vector3(dirF.z, 0, -dirF.x).normalize();
 
@@ -464,9 +501,9 @@
 
       controls.target.copy(player.position).add(new THREE.Vector3(0, 1.2, 0));
 
-      if (Object.keys(actions).length) {
+      if (actions.Idle) {
         if (isJumping) playAction("Jump");
-        else if (isMoving && running) playAction("Run");
+        else if (isMoving && isRunning) playAction("Run");
         else if (isMoving) playAction("Walk");
         else playAction("Idle");
       }
