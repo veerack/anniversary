@@ -216,11 +216,10 @@
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-
-  renderer.outputColorSpace = THREE.SRGBColorSpace;
-  renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 0.88;
   renderer.physicallyCorrectLights = true;
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 0.55; // was ~0.88 → too bright
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
 
   app.appendChild(renderer.domElement);
 
@@ -233,24 +232,27 @@
   scene.add(sky);
 
   const skyU = sky.material.uniforms;
-  skyU["turbidity"].value = 7.5;
-  skyU["rayleigh"].value = 2.0;
+  skyU["turbidity"].value = 6;
+  skyU["rayleigh"].value = 1.2;
   skyU["mieCoefficient"].value = 0.004;
-  skyU["mieDirectionalG"].value = 0.85;
+  skyU["mieDirectionalG"].value = 0.8;
 
-  const sunLight = new THREE.DirectionalLight(0xffffff, 2.6);
+  const sunLight = new THREE.DirectionalLight(0xffffff, 2.2);
   sunLight.castShadow = true;
   
-  // tighter shadow camera = better resolution
+  sunLight.target = player;       // IMPORTANT
+  scene.add(sunLight.target);     // make sure target is in scene
+  
   sunLight.shadow.mapSize.set(4096, 4096);
   sunLight.shadow.camera.near = 0.5;
-  sunLight.shadow.camera.far = 90;
-  sunLight.shadow.camera.left = -22;
-  sunLight.shadow.camera.right = 22;
-  sunLight.shadow.camera.top = 22;
-  sunLight.shadow.camera.bottom = -22;
+  sunLight.shadow.camera.far = 140;
   
-  // the “make shadows actually work” knobs:
+  const SHADOW_BOX = 35; // bigger = shadows cover more area
+  sunLight.shadow.camera.left   = -SHADOW_BOX;
+  sunLight.shadow.camera.right  =  SHADOW_BOX;
+  sunLight.shadow.camera.top    =  SHADOW_BOX;
+  sunLight.shadow.camera.bottom = -SHADOW_BOX;
+  
   sunLight.shadow.bias = -0.00025;
   sunLight.shadow.normalBias = 0.02;
   
@@ -259,7 +261,7 @@
   const moonLight = new THREE.DirectionalLight(0xbfd6ff, 0.35);
   scene.add(moonLight);
 
-  scene.add(new THREE.AmbientLight(0xffffff, 0.03));
+  scene.add(new THREE.AmbientLight(0xffffff, 0.02));
 
   const pmrem = new THREE.PMREMGenerator(renderer);
 
@@ -268,6 +270,18 @@
 
   let envRT = null;
   let envRefreshTimer = 0;
+
+  function updateSunForShadows(){
+    // Keep the light "centered" around the player so shadows don't cut off.
+    const sunDir = new THREE.Vector3(0.6, 1.0, 0.35).normalize(); // fixed sun direction for now
+  
+    const lightPos = player.position.clone().addScaledVector(sunDir, 80);
+    sunLight.position.copy(lightPos);
+  
+    // IMPORTANT: center shadow camera on player
+    sunLight.target.position.copy(player.position);
+    sunLight.shadow.camera.updateProjectionMatrix();
+  }
   
   function updateSkyAndEnv(dt){
     skyTime = (skyTime + dt * 0.004) % 1;
@@ -306,6 +320,7 @@
       envRT = pmrem.fromScene(sky);
       scene.environment = envRT.texture;
     }
+    updateSunForShadows();
   }
 
   // ====== Clouds (billboards with procedural alpha texture) ======
