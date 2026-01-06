@@ -515,6 +515,155 @@
   sunSprite.scale.set(38, 38, 1);
   sunSprite.renderOrder = 9999;
   scene.add(sunSprite);
+
+  // ====== Anime Clouds (billboards) ======
+  function makeAnimeCloudTexture(size = 512) {
+    const c = document.createElement("canvas");
+    c.width = c.height = size;
+    const g = c.getContext("2d");
+  
+    g.clearRect(0, 0, size, size);
+  
+    // soft base blobs
+    for (let k = 0; k < 28; k++) {
+      const x = (0.15 + Math.random() * 0.7) * size;
+      const y = (0.25 + Math.random() * 0.55) * size;
+      const r = (0.10 + Math.random() * 0.22) * size;
+  
+      const grad = g.createRadialGradient(x, y, r * 0.15, x, y, r);
+      grad.addColorStop(0.00, "rgba(255,255,255,0.95)");
+      grad.addColorStop(0.55, "rgba(255,255,255,0.70)");
+      grad.addColorStop(1.00, "rgba(255,255,255,0.0)");
+  
+      g.fillStyle = grad;
+      g.beginPath();
+      g.arc(x, y, r, 0, Math.PI * 2);
+      g.fill();
+    }
+  
+    // anime outline-ish shadow band near bottom
+    g.globalCompositeOperation = "source-atop";
+    const band = g.createLinearGradient(0, size * 0.55, 0, size);
+    band.addColorStop(0.0, "rgba(210,225,255,0.00)");
+    band.addColorStop(0.6, "rgba(170,195,240,0.18)");
+    band.addColorStop(1.0, "rgba(130,160,220,0.00)");
+    g.fillStyle = band;
+    g.fillRect(0, 0, size, size);
+    g.globalCompositeOperation = "source-over";
+  
+    const tex = new THREE.CanvasTexture(c);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
+    return tex;
+  }
+  
+  const animeCloudTex = makeAnimeCloudTexture(512);
+  const animeCloudMat = new THREE.MeshBasicMaterial({
+    map: animeCloudTex,
+    transparent: true,
+    depthWrite: false,
+    depthTest: true,
+    opacity: 0.95,
+  });
+  animeCloudMat.fog = false;
+  
+  const animeClouds = new THREE.Group();
+  scene.add(animeClouds);
+  
+  function spawnAnimeClouds(count = 12) {
+    const geo = new THREE.PlaneGeometry(22, 12);
+    for (let i = 0; i < count; i++) {
+      const m = animeCloudMat.clone();
+      const p = new THREE.Mesh(geo, m);
+      p.renderOrder = -900; // behind most things but above sky
+      p.position.set((Math.random() - 0.5) * 180, 22 + Math.random() * 18, (Math.random() - 0.5) * 180);
+      p.rotation.y = Math.random() * Math.PI * 2;
+      const s = 0.9 + Math.random() * 2.0;
+      p.scale.set(s, s, s);
+  
+      p.userData.drift = new THREE.Vector3(0.4 + Math.random() * 0.8, 0, 0.15 + Math.random() * 0.35);
+      p.userData.spin = (Math.random() - 0.5) * 0.04;
+  
+      animeClouds.add(p);
+    }
+  }
+  spawnAnimeClouds(14);
+  
+  function updateAnimeClouds(dt) {
+    for (const p of animeClouds.children) {
+      p.position.addScaledVector(p.userData.drift, dt);
+      p.rotation.y += p.userData.spin * dt;
+  
+      // wrap around
+      if (p.position.x > 120) p.position.x = -120;
+      if (p.position.x < -120) p.position.x = 120;
+      if (p.position.z > 120) p.position.z = -120;
+      if (p.position.z < -120) p.position.z = 120;
+    }
+  }
+  
+  // ====== Sunrays (cheap fake godrays) ======
+  function makeSunraysMaterial() {
+    return new THREE.ShaderMaterial({
+      transparent: true,
+      depthWrite: false,
+      depthTest: false,
+      blending: THREE.AdditiveBlending,
+      uniforms: {
+        uTime: { value: 0 },
+        uStrength: { value: 0.65 },
+      },
+      vertexShader: `
+        varying vec2 vUv;
+        void main(){
+          vUv = uv;
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }
+      `,
+      fragmentShader: `
+        precision highp float;
+        varying vec2 vUv;
+        uniform float uTime;
+        uniform float uStrength;
+  
+        float hash(float n){ return fract(sin(n)*43758.5453); }
+  
+        void main(){
+          vec2 uv = vUv * 2.0 - 1.0; // -1..1
+          float r = length(uv);
+          if (r > 1.0) discard;
+  
+          float a = atan(uv.y, uv.x);
+  
+          // ray streaks
+          float rays = 0.0;
+          float t = uTime * 0.35;
+          for (int i=0; i<10; i++){
+            float fi = float(i);
+            float freq = 6.0 + fi * 2.0;
+            float ph = hash(fi + 1.7) * 6.28318;
+            rays += smoothstep(0.75, 1.0, sin(a * freq + t + ph)) * (0.10 + 0.06 * fi);
+          }
+  
+          // core glow + falloff
+          float core = exp(-r * 4.5);
+          float fall = pow(1.0 - r, 1.8);
+  
+          float alpha = (core * 0.85 + rays * 0.12) * fall * uStrength;
+  
+          vec3 col = vec3(1.0, 0.95, 0.80) * alpha;
+          gl_FragColor = vec4(col, alpha);
+        }
+      `
+    });
+  }
+  
+  const sunRays = new THREE.Mesh(
+    new THREE.PlaneGeometry(90, 90),
+    makeSunraysMaterial()
+  );
+  sunRays.renderOrder = 9998;
+  scene.add(sunRays);
   
   // Lens flare on the light
   const lensflare = new Lensflare();
@@ -730,36 +879,50 @@
     scene.add(rock);
   }
 
-  function addTree(x, z, s = 1) {
-    const trunk = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.15 * s, 0.22 * s, 2.2 * s, 10),
-      new THREE.MeshStandardMaterial({ color: 0x4a2e1d, roughness: 1, metalness: 0, envMapIntensity: 0.0 })
-    );
-    const crown = new THREE.Mesh(
-      new THREE.SphereGeometry(1.1 * s, 14, 14),
-      new THREE.MeshStandardMaterial({ color: 0x1e4a25, roughness: 1, metalness: 0, envMapIntensity: 0.0 })
-    );
-    trunk.castShadow = crown.castShadow = true;
-    trunk.receiveShadow = crown.receiveShadow = true;
-
-    const tree = new THREE.Group();
-    tree.add(trunk);
-    crown.position.y = 1.5 * s;
-    tree.add(crown);
-
-    placeOnTerrain(tree, x, z, 0);
-    trunk.position.y = 1.1 * s;
-
-    scene.add(tree);
+  // ====== TREE_V3 loader (load once, clone many) ======
+  const TREE_URL = "assets/models/TREE_V3.glb";
+  let treePrototype = null;
+  
+  async function preloadTreeV3() {
+    if (treePrototype) return treePrototype;
+  
+    const gltf = await new Promise((res, rej) => gltfLoader.load(TREE_URL, res, undefined, rej));
+    treePrototype = gltf.scene;
+  
+    treePrototype.traverse((o) => {
+      if (!o.isMesh) return;
+      o.castShadow = true;
+      o.receiveShadow = true;
+      if (o.material && "envMapIntensity" in o.material) o.material.envMapIntensity = 0.0;
+      if (o.material) o.material.needsUpdate = true;
+    });
+  
+    return treePrototype;
+  }
+  
+  function addTreeV3(x, z, s = 1) {
+    if (!treePrototype) return; // if not loaded yet, just skip this frame
+  
+    const t = treePrototype.clone(true);
+    placeOnTerrain(t, x, z, 0);
+    t.rotation.y = Math.random() * Math.PI * 2;
+  
+    // TREE_V3 likely has its own scale; tweak the multiplier if it looks huge/small
+    const scaleMul = 1.0;
+    t.scale.setScalar(s * scaleMul);
+  
+    scene.add(t);
   }
 
   async function scatterScene() {
+    await preloadTreeV3();
+    
     for (let i = 0; i < 70; i++) {
       const a = Math.random() * Math.PI * 2;
       const r = 30 + Math.random() * 22;
       const x = Math.cos(a) * r;
       const z = Math.sin(a) * r;
-      addTree(x, z, 0.85 + Math.random() * 0.6);
+      addTreeV3(x, z, 0.85 + Math.random() * 0.6);
     }
   
     for (let i = 0; i < 45; i++) {
@@ -1423,7 +1586,12 @@
     setWindStrength(THREE.MathUtils.clamp(windBase + windMove, 0, 1));
   
     updateCamera(dt);
-    sunSprite.position.copy(camera.position).addScaledVector(sunDir, 220);
+    updateAnimeClouds(dt);
+    
+    // place sunrays slightly in front of camera, facing camera, centered on sun direction
+    sunRays.position.copy(camera.position).addScaledVector(sunDir, 200);
+    sunRays.quaternion.copy(camera.quaternion);
+    sunRays.material.uniforms.uTime.value = clock.elapsedTime;
     updateBirds(clock.elapsedTime, dt);
     shaderSky.mat.uniforms.uTime.value = clock.elapsedTime;
   
