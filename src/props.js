@@ -93,9 +93,16 @@ export function createWorldScatter(scene, { mapRadius = 95 } = {}) {
 
   async function preloadMountain() {
     if (mountainPrototype) return mountainPrototype;
-    const gltf = await new Promise((res, rej) => gltfLoader.load(MOUNTAIN_URL, res, undefined, rej));
-    mountainPrototype = prepModel(gltf.scene);
-    return mountainPrototype;
+  
+    try {
+      const gltf = await new Promise((res, rej) => gltfLoader.load(MOUNTAIN_URL, res, undefined, rej));
+      mountainPrototype = prepModel(gltf.scene);
+      console.log("[mountain] loaded", MOUNTAIN_URL, mountainPrototype);
+      return mountainPrototype;
+    } catch (e) {
+      console.error("[mountain] FAILED to load", MOUNTAIN_URL, e);
+      return null;
+    }
   }
 
   function addMountainRing({
@@ -144,6 +151,15 @@ export function createWorldScatter(scene, { mapRadius = 95 } = {}) {
     await preloadRocks();
     await preloadMountain();
 
+    {
+      const m = mountainPrototype.clone(true);
+      placeOnTerrain(m, 0, -18, 0.0);
+      m.scale.setScalar(20);        // BIG so we can’t miss it
+      m.rotation.y = 0;
+      scene.add(m);
+      console.log("[mountain] spawned debug mountain");
+    }
+    
     // --- Mountains first (so "world boundary" exists immediately) ---
     addMountainRing({
       count: 18,
