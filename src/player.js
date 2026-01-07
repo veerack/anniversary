@@ -30,36 +30,40 @@ export function createPlayerController({
 
   const PLAYER_RADIUS = 0.55;
   
-  function resolveCollisionsXZ(pos, y) {
-    // do a few passes to handle multiple overlaps nicely
-    for (let iter = 0; iter < 3; iter++) {
-      let any = false;
+  function resolveCollisionsXZ(pos, y, colliders, playerRadius = 0.55) {
+    if (!colliders?.length) return;
+  
+    // Iterate a few times so multiple overlaps resolve smoothly
+    for (let iter = 0; iter < 4; iter++) {
+      let pushed = false;
   
       for (const c of colliders) {
-        // optional: only collide if within vertical range
+        // optional y-range filter
         if (y < c.yMin || y > c.yMax) continue;
   
         const dx = pos.x - c.x;
         const dz = pos.z - c.z;
-        const d2 = dx*dx + dz*dz;
+        const d2 = dx * dx + dz * dz;
   
-        const min = PLAYER_RADIUS + c.r;
-        const min2 = min * min;
+        const minD = c.r + playerRadius;
+        if (d2 >= minD * minD) continue;
   
-        if (d2 < min2) {
-          const d = Math.sqrt(Math.max(d2, 1e-8));
-          const nx = dx / d;
-          const nz = dz / d;
-          const push = (min - d);
+        const d = Math.sqrt(d2) || 0.0001;
+        const nx = dx / d;
+        const nz = dz / d;
   
-          pos.x += nx * push;
-          pos.z += nz * push;
+        const penetration = (minD - d);
   
-          any = true;
-        }
+        // ✅ clamp per-contact push so you never “launch”
+        const push = Math.min(penetration, 0.35);
+  
+        pos.x += nx * push;
+        pos.z += nz * push;
+  
+        pushed = true;
       }
   
-      if (!any) break;
+      if (!pushed) break;
     }
   }
   
@@ -134,7 +138,7 @@ export function createPlayerController({
       clampToMap(nextPos);
     
       // collide in XZ (use current visual ground y as "player height")
-      resolveCollisionsXZ(nextPos, playerVisual.position.y);
+      resolveCollisionsXZ(player.position, playerVisual.position.y, worldColliders, 0.55);
     
       // commit
       player.position.copy(nextPos);
