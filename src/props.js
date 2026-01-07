@@ -4,12 +4,66 @@ import { placeOnTerrain, terrainHeight } from "./terrain.js";
 
 console.log("🔥 props.js LOADED", new Date().toISOString());
 
+// --- helper: hide baked "green ground / plane" inside some GLBs ---
+function hideBakedGroundPlanes(root) {
+  root.traverse((o) => {
+    if (!o.isMesh) return;
+
+    const name = (o.name || "").toLowerCase();
+    const looksLikeGroundByName =
+      name.includes("ground") ||
+      name.includes("terrain") ||
+      name.includes("plane") ||
+      name.includes("grass");
+
+    const geom = o.geometry;
+    if (!geom) return;
+
+    geom.computeBoundingBox?.();
+    const bb = geom.boundingBox;
+    if (!bb) return;
+
+    const sizeX = bb.max.x - bb.min.x;
+    const sizeY = bb.max.y - bb.min.y;
+    const sizeZ = bb.max.z - bb.min.z;
+
+    const veryFlat = sizeY < 0.02 * Math.max(sizeX, sizeZ);
+    const veryLarge = Math.max(sizeX, sizeZ) > 20;
+
+    const mats = Array.isArray(o.material) ? o.material : [o.material];
+    const greenish = mats.some((m) => {
+      const c = m?.color;
+      if (!c) return false;
+      return c.g > c.r * 1.2 && c.g > c.b * 1.2;
+    });
+
+    if (looksLikeGroundByName || (veryFlat && veryLarge && greenish)) {
+      o.visible = false;
+      o.castShadow = false;
+      o.receiveShadow = false;
+    }
+  });
+}
+
+// --- helper: consistent no-IBL look + shadows ---
+function prepModel(root) {
+  root.traverse((o) => {
+    if (!o.isMesh) return;
+    o.castShadow = true;
+    o.receiveShadow = true;
+    o.frustumCulled = false; // helps with big ring props
+    if (o.material && "envMapIntensity" in o.material) o.material.envMapIntensity = 0.0;
+    if (o.material) o.material.needsUpdate = true;
+  });
+  return root;
+}
+
 export function addPillars(scene) {
   const propMat = new THREE.MeshStandardMaterial({
     color: 0x1a2250,
     roughness: 0.75,
     metalness: 0.05,
-    envMapIntensity: 0.0
+    envMapIntensity: 0.0,
   });
 
   function pillar(x, z) {
@@ -20,19 +74,9 @@ export function addPillars(scene) {
     scene.add(p);
   }
 
-  pillar(-10, 10); pillar(10, -10); pillar(0, 0);
-}
-
-// --- helper: consistent no-IBL look + shadows ---
-function prepModel(root) {
-  root.traverse((o) => {
-    if (!o.isMesh) return;
-    o.castShadow = true;
-    o.receiveShadow = true;
-    if (o.material && "envMapIntensity" in o.material) o.material.envMapIntensity = 0.0;
-    if (o.material) o.material.needsUpdate = true;
-  });
-  return root;
+  pillar(-10, 10);
+  pillar(10, -10);
+  pillar(0, 0);
 }
 
 export function createWorldScatter(scene, { mapRadius = 95 } = {}) {
@@ -65,7 +109,7 @@ export function createWorldScatter(scene, { mapRadius = 95 } = {}) {
     const t = treePrototype.clone(true);
     placeOnTerrain(t, x, z, 0);
     t.rotation.y = Math.random() * Math.PI * 2;
-    t.scale.setScalar(s * 1.0);
+    t.scale.setScalar(s);
     scene.add(t);
   }
 
@@ -95,32 +139,31 @@ export function createWorldScatter(scene, { mapRadius = 95 } = {}) {
 
   async function preloadMountain() {
     if (mountainPrototype) return mountainPrototype;
-  
-    try {
-      const gltf = await new Promise((res, rej) => gltfLoader.load(MOUNTAIN_URL, res, undefined, rej));
-      mountainPrototype = prepModel(gltf.scene);
 
-      let meshCount = 0;
-      mountainPrototype.traverse(o => { if (o.isMesh) meshCount++; });
-      console.log("[mountain] meshCount =", meshCount);
+    const gltf = await new Promise((res, rej) => gltfLoader.load(MOUNTAIN_URL, res, undefined, rej));
+    mountainPrototype = prepModel(gltf.scene);
 
-      console.log("[mountain] loaded", MOUNTAIN_URL, mountainPrototype);
-      return mountainPrototype;
-    } catch (e) {
-      console.error("[mountain] FAILED to load", MOUNTAIN_URL, e);
-      return null;
-    }
+    // IMPORTANT: remove the baked green ground/plane inside the model
+    hideBakedGroundPlanes(mountainPrototype);
+
+    // helpful info in console
+    let meshCount = 0;
+    mountainPrototype.traverse((o) => { if (o.isMesh) meshCount++; });
+    console.log("[mountain] loaded", MOUNTAIN_URL, "meshCount =", meshCount);
+
+    return mountainPrototype;
   }
 
-  function addMountainRing({
-    count = 18,
-    ringOffset = 55,     // how far beyond playable map
-    yOffset = -2.0,      // sink slightly
-    scale = 6.0,         // base scale (you may need to tweak!)
+  function spawnMountainRing({
+    count = 14,
+    ringOffset = 18,    // ✅ much closer (was 55)
+    yOffset = -2.2,     // ✅ sink base into terrain
+    scale = 0.35,       // ✅ MUCH smaller (was 6.0)
     scaleJitter = 0.25,
-    yawJitter = 0.12
+    yawJitter = 0.25,
+    radiusJitter = 6.0,
   } = {}) {
-    if (!mountainPrototype) return;
+    if (!mountainPrototype) return null;
 
     const R = mapRadius + ringOffset;
 
@@ -132,17 +175,16 @@ export function createWorldScatter(scene, { mapRadius = 95 } = {}) {
       const t = i / count;
       const ang = t * Math.PI * 2;
 
-      const x = Math.cos(ang) * R;
-      const z = Math.sin(ang) * R;
+      const rr = R + (Math.random() * 2 - 1) * radiusJitter;
+      const x = Math.cos(ang) * rr;
+      const z = Math.sin(ang) * rr;
 
       const m = mountainPrototype.clone(true);
 
-      // place on terrain at ring point
       placeOnTerrain(m, x, z, yOffset);
 
-      // face center so it forms a wall
-      m.lookAt(0, m.position.y, 0);
-      m.rotation.y += (Math.random() * 2 - 1) * yawJitter;
+      // Face inward (only yaw)
+      m.rotation.y = (-ang + Math.PI) + (Math.random() * 2 - 1) * yawJitter;
 
       const s = scale * (1 + (Math.random() * 2 - 1) * scaleJitter);
       m.scale.setScalar(s);
@@ -158,48 +200,15 @@ export function createWorldScatter(scene, { mapRadius = 95 } = {}) {
     await preloadRocks();
     await preloadMountain();
 
-    // DEBUG: force-visualize Mountain with normal-material + box helper
-    {
-      const m = mountainPrototype.clone(true);
-    
-      // hard-force visibility + disable culling
-      m.traverse(o => {
-        o.visible = true;
-        if (o.isMesh) {
-          o.frustumCulled = false;
-          o.material = new THREE.MeshNormalMaterial(); // ignore lights/textures
-        }
-      });
-    
-      // place it near player and lift it up so it's not under terrain
-      m.position.set(0, 8, -18);
-    
-      // make it absurdly big so you can’t miss it
-      m.scale.setScalar(200);
-
-      const dbgCube = new THREE.Mesh(
-        new THREE.BoxGeometry(20, 20, 20),
-        new THREE.MeshNormalMaterial()
-      );
-      dbgCube.position.copy(m.position);
-      scene.add(dbgCube);
-      console.log("[debug] cube added at", dbgCube.position);
-      
-      scene.add(m);
-    
-      // show its bounds
-      const box = new THREE.BoxHelper(m, 0xff00ff);
-      scene.add(box);
-    
-      console.log("[mountain] debug added", m);
-    }
-    
-    // --- Mountains first (so "world boundary" exists immediately) ---
-    addMountainRing({
-      count: 18,
-      ringOffset: 55,
-      yOffset: -2.0,
-      scale: 6.0
+    // --- Mountains first (world boundary) ---
+    spawnMountainRing({
+      count: 14,
+      ringOffset: 18,
+      yOffset: -2.2,
+      scale: 0.35,
+      scaleJitter: 0.25,
+      yawJitter: 0.25,
+      radiusJitter: 6.0,
     });
 
     // --- Trees ---
@@ -211,13 +220,13 @@ export function createWorldScatter(scene, { mapRadius = 95 } = {}) {
       addTreeV3(x, z, 0.85 + Math.random() * 0.6);
     }
 
-    // --- Rocks (GLB clones instead of procedural) ---
+    // --- Rocks (GLB clones) ---
     for (let i = 0; i < 55; i++) {
       const x = (Math.random() - 0.5) * 90;
       const z = (Math.random() - 0.5) * 90;
       if (Math.hypot(x, z) < 16) continue;
 
-      const s = 0.7 + Math.random() * 0.9;   // tweak as needed
+      const s = 0.7 + Math.random() * 0.9;
       addRocksGLB(x, z, s, 0.0);
     }
 
@@ -232,6 +241,7 @@ export function createWorldScatter(scene, { mapRadius = 95 } = {}) {
       const x = THREE.MathUtils.lerp(-18, 22, t);
       const z = Math.sin(t * Math.PI * 2) * 8;
       const y = terrainHeight(x, z) + 0.02;
+
       const p = new THREE.Mesh(new THREE.CircleGeometry(2.2, 18), pathMat);
       p.rotation.x = -Math.PI / 2;
       p.position.set(x, y, z);
