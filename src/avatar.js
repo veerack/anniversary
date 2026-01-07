@@ -15,12 +15,21 @@ export function setupAvatar({ playerVisual, avatarUrl, anims, minTracksForRun })
   let jumpAnimDone = false;
   let danceActive = null;
 
-  function playAction(name, fade=0.14){
+  function playAction(name, fade = 0.14){
     const next = actions[name];
     if (!next) return;
-    if (currentAction === next) return;
-
+  
+    // If it's already the current action but not actually running (ended/stopped),
+    // restart it instead of returning (prevents T-pose).
+    if (currentAction === next) {
+      if (!next.isRunning()) {
+        next.reset().fadeIn(0.06).play();
+      }
+      return;
+    }
+  
     if (currentAction) currentAction.fadeOut(fade);
+  
     currentAction = next;
     currentAction.reset().fadeIn(fade).play();
   }
