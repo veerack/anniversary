@@ -95,3 +95,67 @@ function makeGrassMaps() {
       const r = (170 + h*70)|0;
       const i = (y*size + x)*4;
       imgR.data[i+0] = r;
+      imgR.data[i+1] = r;
+      imgR.data[i+2] = r;
+      imgR.data[i+3] = 255;
+    }
+  }
+  gR.putImageData(imgR,0,0);
+
+  const map = new THREE.CanvasTexture(c0);
+  map.colorSpace = THREE.SRGBColorSpace;
+  map.wrapS = map.wrapT = THREE.RepeatWrapping;
+
+  const normalMap = new THREE.CanvasTexture(cN);
+  normalMap.wrapS = normalMap.wrapT = THREE.RepeatWrapping;
+
+  const roughnessMap = new THREE.CanvasTexture(cR);
+  roughnessMap.wrapS = roughnessMap.wrapT = THREE.RepeatWrapping;
+
+  return { map, normalMap, roughnessMap };
+}
+
+export function buildTerrain({ scene, size, seg }) {
+  const { map, normalMap, roughnessMap } = makeGrassMaps();
+  map.repeat.set(14,14);
+  normalMap.repeat.set(14,14);
+  roughnessMap.repeat.set(14,14);
+
+  const terrainGeo = new THREE.PlaneGeometry(size, size, seg, seg);
+  terrainGeo.rotateX(-Math.PI / 2);
+
+  const posAttr = terrainGeo.attributes.position;
+  for (let i=0; i<posAttr.count; i++) {
+    const x = posAttr.getX(i);
+    const z = posAttr.getZ(i);
+    posAttr.setY(i, terrainHeight(x, z));
+  }
+  terrainGeo.computeVertexNormals();
+
+  const terrainMat = new THREE.MeshStandardMaterial({
+    map, normalMap, roughnessMap,
+    color: 0xffffff,
+    roughness: 1.0,
+    metalness: 0.0,
+    envMapIntensity: 0.0
+  });
+
+  terrainMat.onBeforeCompile = (shader) => {
+    shader.fragmentShader = shader.fragmentShader.replace(
+      "#include <dithering_fragment>",
+      `
+        float h = vViewPosition.y;
+        vec3 tint = mix(vec3(1.0, 1.0, 1.0), vec3(0.92, 1.03, 0.92), smoothstep(-2.0, 2.0, h));
+        gl_FragColor.rgb *= tint;
+        #include <dithering_fragment>
+      `
+    );
+  };
+  terrainMat.needsUpdate = true;
+
+  const ground = new THREE.Mesh(terrainGeo, terrainMat);
+  ground.receiveShadow = true;
+  scene.add(ground);
+
+  return { ground };
+}
