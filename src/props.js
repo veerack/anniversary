@@ -97,6 +97,11 @@ export function createWorldScatter(scene, { mapRadius = 95 } = {}) {
     try {
       const gltf = await new Promise((res, rej) => gltfLoader.load(MOUNTAIN_URL, res, undefined, rej));
       mountainPrototype = prepModel(gltf.scene);
+
+      let meshCount = 0;
+      mountainPrototype.traverse(o => { if (o.isMesh) meshCount++; });
+      console.log("[mountain] meshCount =", meshCount);
+
       console.log("[mountain] loaded", MOUNTAIN_URL, mountainPrototype);
       return mountainPrototype;
     } catch (e) {
@@ -151,13 +156,32 @@ export function createWorldScatter(scene, { mapRadius = 95 } = {}) {
     await preloadRocks();
     await preloadMountain();
 
+    // DEBUG: force-visualize Mountain with normal-material + box helper
     {
       const m = mountainPrototype.clone(true);
-      placeOnTerrain(m, 0, -18, 0.0);
-      m.scale.setScalar(20);        // BIG so we can’t miss it
-      m.rotation.y = 0;
+    
+      // hard-force visibility + disable culling
+      m.traverse(o => {
+        o.visible = true;
+        if (o.isMesh) {
+          o.frustumCulled = false;
+          o.material = new THREE.MeshNormalMaterial(); // ignore lights/textures
+        }
+      });
+    
+      // place it near player and lift it up so it's not under terrain
+      m.position.set(0, 8, -18);
+    
+      // make it absurdly big so you can’t miss it
+      m.scale.setScalar(200);
+    
       scene.add(m);
-      console.log("[mountain] spawned debug mountain");
+    
+      // show its bounds
+      const box = new THREE.BoxHelper(m, 0xff00ff);
+      scene.add(box);
+    
+      console.log("[mountain] debug added", m);
     }
     
     // --- Mountains first (so "world boundary" exists immediately) ---
