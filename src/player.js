@@ -137,8 +137,8 @@ export function createPlayerController({
       // keep in map
       clampToMap(nextPos);
     
-      // collide in XZ (use current visual ground y as "player height")
-      resolveCollisionsXZ(player.position, playerVisual.position.y, worldColliders, 0.55);
+      // collide in XZ using *nextPos* and the injected colliders
+      resolveCollisionsXZ(nextPos, playerVisual.position.y, colliders, PLAYER_RADIUS);
     
       // commit
       player.position.copy(nextPos);
