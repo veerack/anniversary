@@ -4,14 +4,15 @@ export const AVATAR_URL = "https://models.readyplayer.me/695c48e31c1817592c4ec48
 
 export const ANIMS = {
   Idle: "assets/anim/Idle.fbx",
+  StartWalk: "assets/anim/StartWalking.fbx",
   Walk: "assets/anim/Walk.fbx",
+  StopWalk: "assets/anim/StopWalking.fbx",
   Run:  "assets/anim/Run.fbx",
   Jump: "assets/anim/Jump.fbx",
-  Samba:"assets/anim/Samba.fbx",
-  Rumba:"assets/anim/Rumba.fbx",
-  Salsa:"assets/anim/Salsa.fbx",
+  Samba: "assets/anim/Samba.fbx",
+  Rumba: "assets/anim/Rumba.fbx",
+  Salsa: "assets/anim/Salsa.fbx",
 };
-
 export const MEMORIES = [
   { id:"first-meet", title:"How we met", text:"Write a short story here.", pos:new THREE.Vector3(-6,0,-4) },
   { id:"first-date", title:"First date", text:"Where did you go? One detail you remember.", pos:new THREE.Vector3(6,0,-2) },
