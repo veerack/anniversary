@@ -21,7 +21,7 @@ const stamBar = document.getElementById("stamBar");
 // Scene
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0xbad8ff);
-scene.fog = new THREE.Fog(0xbad8ff, 120, 1500);
+scene.fog = new THREE.Fog(0xbad8ff, 95, 280);
 
 // Renderer
 const renderer = new THREE.WebGLRenderer({ antialias:true });
