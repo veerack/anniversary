@@ -2,6 +2,8 @@ import * as THREE from "three";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { placeOnTerrain, terrainHeight } from "./terrain.js";
 
+console.log("🔥 props.js LOADED", new Date().toISOString());
+
 export function addPillars(scene) {
   const propMat = new THREE.MeshStandardMaterial({
     color: 0x1a2250,
@@ -183,6 +185,14 @@ export function createWorldScatter(scene, { mapRadius = 95 } = {}) {
     
       console.log("[mountain] debug added", m);
     }
+
+    const dbgCube = new THREE.Mesh(
+      new THREE.BoxGeometry(20, 20, 20),
+      new THREE.MeshNormalMaterial()
+    );
+    dbgCube.position.copy(m.position);
+    scene.add(dbgCube);
+    console.log("[debug] cube added at", dbgCube.position);
     
     // --- Mountains first (so "world boundary" exists immediately) ---
     addMountainRing({
@@ -212,8 +222,8 @@ export function createWorldScatter(scene, { mapRadius = 95 } = {}) {
     }
 
     // --- Props ---
-    await addGLB({ url: "assets/models/Car.glb", x: 18, z: -14, rot: 1.2, scale: 1.0, yOffset: 0.0 });
-    await addGLB({ url: "assets/models/Bench.glb", x: -14, z: -8, rot: -0.4, scale: 1.0, yOffset: 0.0 });
+    await addGLB({ url: "assets/models/Car.glb", x: 18, z: -14, rot: 1.2, scale: 1.5, yOffset: 0.0 });
+    await addGLB({ url: "assets/models/Bench.glb", x: -14, z: -8, rot: -0.4, scale: 0.2, yOffset: 0.0 });
 
     // --- Path ---
     const pathMat = new THREE.MeshStandardMaterial({ color: 0x3a3a2f, roughness: 1, metalness: 0 });
