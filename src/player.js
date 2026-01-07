@@ -12,7 +12,7 @@ export function createPlayerController({
   onJumpStart,
   onCancelDance,
   avatarApi,
-  colliders = [], // ✅ add this
+  colliders = [],
 }){
   const keys = new Set();
   let jumpRequested = false;
