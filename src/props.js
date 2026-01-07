@@ -51,14 +51,41 @@ function prepModel(root) {
     if (!o.isMesh) return;
     o.castShadow = true;
     o.receiveShadow = true;
-    o.frustumCulled = false; // helps with big ring props
+    o.frustumCulled = false;
     if (o.material && "envMapIntensity" in o.material) o.material.envMapIntensity = 0.0;
     if (o.material) o.material.needsUpdate = true;
   });
   return root;
 }
 
-export function addPillars(scene) {
+/**
+ * Build a simple "cylinder-ish" collider from an object's world bounds.
+ * We store a circle on XZ + y range, good enough for walking collisions.
+ */
+function makeColliderFromObject(obj, { inflate = 0.0, yPad = 0.2 } = {}) {
+  const box = new THREE.Box3().setFromObject(obj);
+  if (!isFinite(box.min.x) || !isFinite(box.max.x)) return null;
+
+  const center = new THREE.Vector3();
+  const size = new THREE.Vector3();
+  box.getCenter(center);
+  box.getSize(size);
+
+  // XZ circle radius from bounds
+  const r = 0.5 * Math.max(size.x, size.z) + inflate;
+
+  return {
+    x: center.x,
+    z: center.z,
+    r,
+    yMin: box.min.y - yPad,
+    yMax: box.max.y + yPad,
+    // optional debug
+    // box
+  };
+}
+
+export function addPillars(scene, colliders) {
   const propMat = new THREE.MeshStandardMaterial({
     color: 0x1a2250,
     roughness: 0.75,
@@ -72,6 +99,12 @@ export function addPillars(scene) {
     p.castShadow = true;
     p.receiveShadow = true;
     scene.add(p);
+
+    // collider
+    const col = makeColliderFromObject(p, { inflate: 0.35 });
+    if (col) colliders.push(col);
+
+    return p;
   }
 
   pillar(-10, 10);
@@ -82,7 +115,10 @@ export function addPillars(scene) {
 export function createWorldScatter(scene, { mapRadius = 95 } = {}) {
   const gltfLoader = new GLTFLoader();
 
-  async function addGLB({ url, x, z, rot = 0, scale = 1, yOffset = 0 }) {
+  // public collider list
+  const colliders = [];
+
+  async function addGLB({ url, x, z, rot = 0, scale = 1, yOffset = 0, colliderInflate = 0.2 }) {
     const gltf = await new Promise((res, rej) => gltfLoader.load(url, res, undefined, rej));
     const obj = prepModel(gltf.scene);
 
@@ -90,6 +126,11 @@ export function createWorldScatter(scene, { mapRadius = 95 } = {}) {
     obj.rotation.y = rot;
     obj.scale.setScalar(scale);
     scene.add(obj);
+
+    // collider for whole object
+    const col = makeColliderFromObject(obj, { inflate: colliderInflate });
+    if (col) colliders.push(col);
+
     return obj;
   }
 
@@ -105,12 +146,17 @@ export function createWorldScatter(scene, { mapRadius = 95 } = {}) {
   }
 
   function addTreeV3(x, z, s = 1) {
-    if (!treePrototype) return;
+    if (!treePrototype) return null;
     const t = treePrototype.clone(true);
     placeOnTerrain(t, x, z, 0);
     t.rotation.y = Math.random() * Math.PI * 2;
     t.scale.setScalar(s);
     scene.add(t);
+
+    const col = makeColliderFromObject(t, { inflate: 0.35 });
+    if (col) colliders.push(col);
+
+    return t;
   }
 
   // ===== Rocks.glb (load once, clone many) =====
@@ -125,12 +171,17 @@ export function createWorldScatter(scene, { mapRadius = 95 } = {}) {
   }
 
   function addRocksGLB(x, z, s = 1, yOffset = 0.0) {
-    if (!rocksPrototype) return;
+    if (!rocksPrototype) return null;
     const r = rocksPrototype.clone(true);
     placeOnTerrain(r, x, z, yOffset);
     r.rotation.y = Math.random() * Math.PI * 2;
     r.scale.setScalar(s);
     scene.add(r);
+
+    const col = makeColliderFromObject(r, { inflate: 0.25 });
+    if (col) colliders.push(col);
+
+    return r;
   }
 
   // ===== Mountain.glb ring (load once, clone in a circle) =====
@@ -142,11 +193,8 @@ export function createWorldScatter(scene, { mapRadius = 95 } = {}) {
 
     const gltf = await new Promise((res, rej) => gltfLoader.load(MOUNTAIN_URL, res, undefined, rej));
     mountainPrototype = prepModel(gltf.scene);
-
-    // IMPORTANT: remove the baked green ground/plane inside the model
     hideBakedGroundPlanes(mountainPrototype);
 
-    // helpful info in console
     let meshCount = 0;
     mountainPrototype.traverse((o) => { if (o.isMesh) meshCount++; });
     console.log("[mountain] loaded", MOUNTAIN_URL, "meshCount =", meshCount);
@@ -156,12 +204,13 @@ export function createWorldScatter(scene, { mapRadius = 95 } = {}) {
 
   function spawnMountainRing({
     count = 14,
-    ringOffset = 18,    // ✅ much closer (was 55)
-    yOffset = -2.2,     // ✅ sink base into terrain
-    scale = 0.35,       // ✅ MUCH smaller (was 6.0)
+    ringOffset = 18,
+    yOffset = -2.2,
+    scale = 0.35,
     scaleJitter = 0.25,
     yawJitter = 0.25,
     radiusJitter = 6.0,
+    colliderInflate = 2.0, // mountains are huge, make collision forgiving
   } = {}) {
     if (!mountainPrototype) return null;
 
@@ -186,12 +235,16 @@ export function createWorldScatter(scene, { mapRadius = 95 } = {}) {
       m.rotation.y =
         (-ang + Math.PI) +
         (Math.random() * 2 - 1) * yawJitter +
-        (Math.random() * Math.PI * 2) * 0.02; // tiny extra variety
+        (Math.random() * Math.PI * 2) * 0.02;
 
       const s = scale * (1 + (Math.random() * 2 - 1) * scaleJitter);
       m.scale.setScalar(s);
 
       grp.add(m);
+
+      // collider for each mountain chunk
+      const col = makeColliderFromObject(m, { inflate: colliderInflate, yPad: 5.0 });
+      if (col) colliders.push(col);
     }
 
     return grp;
@@ -202,25 +255,27 @@ export function createWorldScatter(scene, { mapRadius = 95 } = {}) {
     await preloadRocks();
     await preloadMountain();
 
-    // --- Mountains (2-layer ring, farther + less dense) ---
+    // --- Mountains (2-layer ring) ---
     spawnMountainRing({
       count: 34,
-      ringOffset: 70,     // farther
-      yOffset: -7.5,      // sink more so it blends into terrain
-      scale: 0.70,        // slightly smaller
+      ringOffset: 70,
+      yOffset: -7.5,
+      scale: 0.70,
       scaleJitter: 0.35,
       yawJitter: 0.45,
-      radiusJitter: 16.0
+      radiusJitter: 16.0,
+      colliderInflate: 2.5,
     });
-    
+
     spawnMountainRing({
       count: 44,
-      ringOffset: 105,    // far silhouette layer
+      ringOffset: 105,
       yOffset: -12.0,
       scale: 1.05,
       scaleJitter: 0.45,
       yawJitter: 0.55,
-      radiusJitter: 22.0
+      radiusJitter: 22.0,
+      colliderInflate: 3.5,
     });
 
     // --- Trees ---
@@ -232,7 +287,7 @@ export function createWorldScatter(scene, { mapRadius = 95 } = {}) {
       addTreeV3(x, z, 0.85 + Math.random() * 0.6);
     }
 
-    // --- Rocks (GLB clones) ---
+    // --- Rocks ---
     for (let i = 0; i < 55; i++) {
       const x = (Math.random() - 0.5) * 90;
       const z = (Math.random() - 0.5) * 90;
@@ -243,10 +298,25 @@ export function createWorldScatter(scene, { mapRadius = 95 } = {}) {
     }
 
     // --- Props ---
-    await addGLB({ url: "assets/models/Car.glb", x: 18, z: -14, rot: 1.2, scale: 1.5, yOffset: 0.0 });
-    await addGLB({ url: "assets/models/Bench.glb", x: -14, z: -8, rot: -0.4, scale: 0.2, yOffset: 0.0 });
+    await addGLB({
+      url: "assets/models/Car.glb",
+      x: 18, z: -14,
+      rot: 1.2,
+      scale: 1.5,
+      yOffset: 0.0,
+      colliderInflate: 0.6,
+    });
 
-    // --- Path ---
+    await addGLB({
+      url: "assets/models/Bench.glb",
+      x: -14, z: -8,
+      rot: -0.4,
+      scale: 0.2,
+      yOffset: 0.0,
+      colliderInflate: 0.4,
+    });
+
+    // --- Path (no collider; it’s ground) ---
     const pathMat = new THREE.MeshStandardMaterial({ color: 0x3a3a2f, roughness: 1, metalness: 0 });
     for (let i = 0; i < 26; i++) {
       const t = i / 25;
@@ -262,5 +332,5 @@ export function createWorldScatter(scene, { mapRadius = 95 } = {}) {
     }
   }
 
-  return { scatterScene };
+  return { scatterScene, colliders };
 }
