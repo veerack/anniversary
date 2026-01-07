@@ -122,6 +122,8 @@ const playerCtl = createPlayerController({
   onJumpStart: () => avatar.onJumpStart(),
   onCancelDance: () => avatar.cancelDance(),
   avatarApi: avatar,
+
+  colliders: world.colliders,   // ✅ THIS is the “world thing”
 });
 
 controls.target.copy(player.position).add(new THREE.Vector3(0, TUNING.LOOK_HEIGHT, 0));
