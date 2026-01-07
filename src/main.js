@@ -73,12 +73,11 @@ const grassField = createGrassField({
 });
 scene.add(grassField.mesh);
 
-// Props
-addPillars(scene);
+// Props / World
 const world = createWorldScatter(scene, { mapRadius: TUNING.MAP_RADIUS });
 
-addPillars(scene, world.colliders);        // <- if you update addPillars to push colliders
-world.scatterScene();                      // don’t await (fine)
+addPillars(scene, world.colliders);   // ✅ pass the array
+world.scatterScene();                // ✅ keep this
 
 // Player container
 const player = new THREE.Group();
