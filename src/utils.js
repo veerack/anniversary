@@ -32,7 +32,6 @@ export function stripRootTranslation(clip) {
 export function remapClipToAvatarBones(clip, avatarRoot, debugLabel) {
   const boneMap = buildBoneKeyToNameMap(avatarRoot);
   const outTracks = [];
-
   for (const tr of clip.tracks) {
     const parts = tr.name.split(".");
     if (parts.length < 2) continue;
@@ -53,7 +52,6 @@ export function remapClipToAvatarBones(clip, avatarRoot, debugLabel) {
       outTracks.push(new THREE.VectorKeyframeTrack(dstTrackName, times, values));
     }
   }
-
   return new THREE.AnimationClip(clip.name || debugLabel, clip.duration, outTracks);
 }
 
