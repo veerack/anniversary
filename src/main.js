@@ -21,7 +21,7 @@ const stamBar = document.getElementById("stamBar");
 // Scene
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0xbad8ff);
-scene.fog = new THREE.Fog(0xbad8ff, 75, 280);
+scene.fog = new THREE.Fog(0xbad8ff, 120, 1500);
 
 // Renderer
 const renderer = new THREE.WebGLRenderer({ antialias:true });
@@ -37,7 +37,7 @@ scene.environment = null;
 app.appendChild(renderer.domElement);
 
 // Camera + controls
-const camera = new THREE.PerspectiveCamera(65, window.innerWidth / window.innerHeight, 0.1, 420);
+const camera = new THREE.PerspectiveCamera(65, window.innerWidth / window.innerHeight, 0.1, 2000);
 camera.position.set(0, 4, 6);
 
 const controls = new OrbitControls(camera, renderer.domElement);
