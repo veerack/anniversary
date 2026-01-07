@@ -85,13 +85,7 @@ export function setupAvatar({ playerVisual, avatarUrl, anims, minTracksForRun })
     actions.Jump = mixer.clipAction(jump);
 
     mixer.addEventListener("finished", (e) => {
-      if (e.action === actions.Jump) {
-        jumpAnimDone = true;
-        // If we're already on the ground, end jump state now.
-        if (playerVisual.position.y <= visualGroundY + FOOT_OFFSET + 0.0001) {
-          isJumping = false;
-        }
-      }
+      if (e.action === actions.Jump) jumpAnimDone = true;
       if (danceActive && e.action === actions[danceActive]) danceActive = null;
     });
 
@@ -133,8 +127,11 @@ export function setupAvatar({ playerVisual, avatarUrl, anims, minTracksForRun })
 
   function setLocomotion({ isMoving, isRunning, isJumping }){
     if (!actions.Idle) return;
+  
+    // While jumping, DO NOT touch animation here.
+    if (isJumping) return;
+  
     if (danceActive) playAction(danceActive, 0.06);
-    else if (isJumping) playAction("Jump", 0.05);
     else if (isMoving && isRunning) playAction("Run", 0.12);
     else if (isMoving) playAction("Walk", 0.14);
     else playAction("Idle", 0.18);
