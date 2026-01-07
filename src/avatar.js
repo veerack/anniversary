@@ -19,17 +19,11 @@ export function setupAvatar({ playerVisual, avatarUrl, anims, minTracksForRun })
     const next = actions[name];
     if (!next) return;
   
-    // If it's already the current action but not actually running (ended/stopped),
-    // restart it instead of returning (prevents T-pose).
-    if (currentAction === next) {
-      if (!next.isRunning()) {
-        next.reset().fadeIn(0.06).play();
-      }
-      return;
-    }
+    // If it's already the current action, do NOTHING.
+    // (Do not reset/replay it, or it'll restart when you press movement keys.)
+    if (currentAction === next) return;
   
     if (currentAction) currentAction.fadeOut(fade);
-  
     currentAction = next;
     currentAction.reset().fadeIn(fade).play();
   }
@@ -91,7 +85,13 @@ export function setupAvatar({ playerVisual, avatarUrl, anims, minTracksForRun })
     actions.Jump = mixer.clipAction(jump);
 
     mixer.addEventListener("finished", (e) => {
-      if (e.action === actions.Jump) jumpAnimDone = true;
+      if (e.action === actions.Jump) {
+        jumpAnimDone = true;
+        // If we're already on the ground, end jump state now.
+        if (playerVisual.position.y <= visualGroundY + FOOT_OFFSET + 0.0001) {
+          isJumping = false;
+        }
+      }
       if (danceActive && e.action === actions[danceActive]) danceActive = null;
     });
 
