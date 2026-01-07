@@ -112,8 +112,16 @@ export function setupAvatar({ playerVisual, avatarUrl, anims, minTracksForRun })
   }
 
   function cancelDance(){
+    if (!danceActive) return; // only cancel if a dance is actually active
+  
+    const danceAction = actions[danceActive];
     danceActive = null;
-    if (currentAction) currentAction.fadeOut(0.08);
+  
+    // Only fade out if we're currently playing that dance action
+    if (danceAction && currentAction === danceAction) {
+      currentAction.fadeOut(0.08);
+      currentAction = null; // optional, but helps avoid stale refs
+    }
   }
 
   function onJumpStart(){
