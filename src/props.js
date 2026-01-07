@@ -156,7 +156,7 @@ export function createWorldScatter(scene, { mapRadius = 95 } = {}) {
     t.scale.setScalar(s);
     scene.add(t);
 
-    const col = makeColliderFromObject(t, { inflate: 0.35, maxR: 12 });
+    const col = makeColliderFromObject(t, { inflate: 0.35, maxR: 2 });
     if (col) colliders.push(col);
 
     return t;
@@ -181,7 +181,7 @@ export function createWorldScatter(scene, { mapRadius = 95 } = {}) {
     r.scale.setScalar(s);
     scene.add(r);
 
-    const col = makeColliderFromObject(r, { inflate: 0.25, maxR: 18 });
+    const col = makeColliderFromObject(r, { inflate: 0.25, maxR: 5 });
     if (col) colliders.push(col);
 
     return r;
@@ -246,7 +246,7 @@ export function createWorldScatter(scene, { mapRadius = 95 } = {}) {
       grp.add(m);
 
       // collider for each mountain chunk
-      const col = makeColliderFromObject(m, { inflate: colliderInflate, yPad: 5.0, maxR: 20 });
+      const col = makeColliderFromObject(m, { inflate: colliderInflate, yPad: 5.0, maxR: 75 });
       if (col) colliders.push(col);
     }
 
