@@ -15,6 +15,11 @@ export function setupAvatar({ playerVisual, avatarUrl, anims, minTracksForRun })
   let jumpAnimDone = false;
   let danceActive = null;
 
+  let locoState = "Idle";           // "Idle" | "StartWalk" | "Walk" | "StopWalk" | "Run" | "Jump"
+  let pendingAfterOneShot = null;   // e.g. "Walk" or "Idle"
+  let lastMoving = false;
+  let lastRunning = false;
+  
   function playAction(name, fade = 0.14){
     const next = actions[name];
     if (!next) return;
@@ -53,9 +58,11 @@ export function setupAvatar({ playerVisual, avatarUrl, anims, minTracksForRun })
 
     mixer = new THREE.AnimationMixer(avatarRoot);
 
-    const [idleRaw, walkRaw, runRaw, jumpRaw, sambaRaw, rumbaRaw, salsaRaw] = await Promise.all([
+    const [idleRaw, startRaw, walkRaw, stopRaw, runRaw, jumpRaw, sambaRaw, rumbaRaw, salsaRaw] = await Promise.all([
       loadFBX(anims.Idle),
+      loadFBX(anims.StartWalk),
       loadFBX(anims.Walk),
+      loadFBX(anims.StopWalk),
       loadFBX(anims.Run),
       loadFBX(anims.Jump),
       loadFBX(anims.Samba),
@@ -64,7 +71,9 @@ export function setupAvatar({ playerVisual, avatarUrl, anims, minTracksForRun })
     ]);
 
     const idle  = remapClipToAvatarBones(stripRootTranslation(idleRaw),  avatarRoot, "Idle");
+    const startWalk = remapClipToAvatarBones(stripRootTranslation(startRaw), avatarRoot, "StartWalk");
     const walk  = remapClipToAvatarBones(stripRootTranslation(walkRaw),  avatarRoot, "Walk");
+    const stopWalk  = remapClipToAvatarBones(stripRootTranslation(stopRaw),  avatarRoot, "StopWalk");
     const run   = remapClipToAvatarBones(stripRootTranslation(runRaw),   avatarRoot, "Run");
     const jump  = remapClipToAvatarBones(stripRootTranslation(jumpRaw),  avatarRoot, "Jump");
     const samba = remapClipToAvatarBones(stripRootTranslation(sambaRaw), avatarRoot, "Samba");
@@ -74,8 +83,11 @@ export function setupAvatar({ playerVisual, avatarUrl, anims, minTracksForRun })
     actions.Samba = mixer.clipAction(samba);
     actions.Rumba = mixer.clipAction(rumba);
     actions.Salsa = mixer.clipAction(salsa);
+    actions.StartWalk = mixer.clipAction(startWalk);
+    actions.StopWalk  = mixer.clipAction(stopWalk);
 
-    for (const k of ["Samba","Rumba","Salsa"]) {
+    // one-shots
+    for (const k of ["StartWalk","StopWalk","Jump","Samba","Rumba","Salsa"]) {
       actions[k].loop = THREE.LoopOnce;
       actions[k].clampWhenFinished = true;
     }
@@ -85,7 +97,23 @@ export function setupAvatar({ playerVisual, avatarUrl, anims, minTracksForRun })
     actions.Jump = mixer.clipAction(jump);
 
     mixer.addEventListener("finished", (e) => {
+      // jump bookkeeping (keep yours)
       if (e.action === actions.Jump) jumpAnimDone = true;
+    
+      // locomotion one-shots
+      if (e.action === actions.StartWalk || e.action === actions.StopWalk) {
+        if (pendingAfterOneShot) {
+          const next = pendingAfterOneShot;
+          pendingAfterOneShot = null;
+          locoState = next;
+          playAction(next, 0.12);
+        } else {
+          // safe fallback
+          locoState = "Idle";
+          playAction("Idle", 0.12);
+        }
+      }
+    
       if (danceActive && e.action === actions[danceActive]) danceActive = null;
     });
 
@@ -133,16 +161,73 @@ export function setupAvatar({ playerVisual, avatarUrl, anims, minTracksForRun })
     if (mixer) mixer.update(dt);
   }
 
-  function setLocomotion({ isMoving, isRunning, isJumping }){
+  function setLocomotion({ isMoving, isRunning, isJumping }) {
     if (!actions.Idle) return;
   
-    // While jumping, DO NOT touch animation here.
-    if (isJumping) return;
+    // Jump always wins (no start/stop while jumping)
+    if (isJumping) {
+      locoState = "Jump";
+      pendingAfterOneShot = null;
+      playAction("Jump", 0.06);
+      lastMoving = isMoving;
+      lastRunning = isRunning;
+      return;
+    }
   
-    if (danceActive) playAction(danceActive, 0.06);
-    else if (isMoving && isRunning) playAction("Run", 0.12);
-    else if (isMoving) playAction("Walk", 0.14);
-    else playAction("Idle", 0.18);
+    // dances win too (your existing behavior)
+    if (danceActive) {
+      playAction(danceActive, 0.06);
+      lastMoving = isMoving;
+      lastRunning = isRunning;
+      return;
+    }
+  
+    const startedMoving = !lastMoving && isMoving;
+    const stoppedMoving = lastMoving && !isMoving;
+  
+    // If we just started moving: StartWalk -> Walk (or Run)
+    if (startedMoving) {
+      locoState = "StartWalk";
+      pendingAfterOneShot = isRunning ? "Run" : "Walk";
+      playAction("StartWalk", 0.10);
+      lastMoving = isMoving;
+      lastRunning = isRunning;
+      return;
+    }
+  
+    // If we just stopped: StopWalk -> Idle
+    if (stoppedMoving) {
+      locoState = "StopWalk";
+      pendingAfterOneShot = "Idle";
+      playAction("StopWalk", 0.10);
+      lastMoving = isMoving;
+      lastRunning = isRunning;
+      return;
+    }
+  
+    // If currently in one-shot, do NOT override it every frame
+    if (locoState === "StartWalk" || locoState === "StopWalk") {
+      // but update what comes after if shift toggled during start
+      if (locoState === "StartWalk") pendingAfterOneShot = isRunning ? "Run" : "Walk";
+      lastMoving = isMoving;
+      lastRunning = isRunning;
+      return;
+    }
+  
+    // normal loops
+    if (isMoving && isRunning) {
+      locoState = "Run";
+      playAction("Run", 0.12);
+    } else if (isMoving) {
+      locoState = "Walk";
+      playAction("Walk", 0.14);
+    } else {
+      locoState = "Idle";
+      playAction("Idle", 0.18);
+    }
+  
+    lastMoving = isMoving;
+    lastRunning = isRunning;
   }
 
   function jumpFinished(){
