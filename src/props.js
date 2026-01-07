@@ -62,7 +62,10 @@ function prepModel(root) {
  * Build a simple "cylinder-ish" collider from an object's world bounds.
  * We store a circle on XZ + y range, good enough for walking collisions.
  */
-function makeColliderFromObject(obj, { inflate = 0.0, yPad = 0.2 } = {}) {
+function makeColliderFromObject(obj, { inflate = 0.0, yPad = 0.2, maxR = 220 } = {}) {
+  // Make sure transforms are applied
+  obj.updateWorldMatrix?.(true, true);
+
   const box = new THREE.Box3().setFromObject(obj);
   if (!isFinite(box.min.x) || !isFinite(box.max.x)) return null;
 
@@ -71,8 +74,10 @@ function makeColliderFromObject(obj, { inflate = 0.0, yPad = 0.2 } = {}) {
   box.getCenter(center);
   box.getSize(size);
 
-  // XZ circle radius from bounds
   const r = 0.5 * Math.max(size.x, size.z) + inflate;
+
+  // 🔥 Kill “world sized” colliders (baked planes / weird exports)
+  if (!isFinite(r) || r <= 0 || r > maxR) return null;
 
   return {
     x: center.x,
@@ -80,8 +85,6 @@ function makeColliderFromObject(obj, { inflate = 0.0, yPad = 0.2 } = {}) {
     r,
     yMin: box.min.y - yPad,
     yMax: box.max.y + yPad,
-    // optional debug
-    // box
   };
 }
 
@@ -153,7 +156,7 @@ export function createWorldScatter(scene, { mapRadius = 95 } = {}) {
     t.scale.setScalar(s);
     scene.add(t);
 
-    const col = makeColliderFromObject(t, { inflate: 0.35 });
+    const col = makeColliderFromObject(t, { inflate: 0.35, maxR: 12 });
     if (col) colliders.push(col);
 
     return t;
@@ -178,7 +181,7 @@ export function createWorldScatter(scene, { mapRadius = 95 } = {}) {
     r.scale.setScalar(s);
     scene.add(r);
 
-    const col = makeColliderFromObject(r, { inflate: 0.25 });
+    const col = makeColliderFromObject(r, { inflate: 0.25, maxR: 18 });
     if (col) colliders.push(col);
 
     return r;
@@ -243,7 +246,7 @@ export function createWorldScatter(scene, { mapRadius = 95 } = {}) {
       grp.add(m);
 
       // collider for each mountain chunk
-      const col = makeColliderFromObject(m, { inflate: colliderInflate, yPad: 5.0 });
+      const col = makeColliderFromObject(m, { inflate: colliderInflate, yPad: 5.0, maxR: 260 });
       if (col) colliders.push(col);
     }
 
