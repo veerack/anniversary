@@ -1,28 +1,29 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 
-import { MEMORIES, TUNING, SKY } from "./config.js";
+import { AVATAR_URL, ANIMS, MEMORIES, TUNING, SKY } from "./config.js";
 import { buildTerrain } from "./terrain.js";
 import { setupSkyAndSun } from "./sky.js";
-
-// later you’ll add:
-// import { setupLighting } from "./lighting.js";
-// import { setupClouds } from "./clouds.js";
-// import { setupBirds } from "./birds.js";
-// import { createGrassField } from "./grass.js";
-// import { setupMemoriesUI } from "./memories.js";
-// import { setupAvatar } from "./avatar.js";
-// import { setupAudio } from "./audio.js";
-// import { createPlayerController } from "./player.js";
+import { setupLighting } from "./lighting.js";
+import { setupClouds } from "./clouds.js";
+import { setupBirds } from "./birds.js";
+import { createGrassField } from "./grass.js";
+import { addPillars, createWorldScatter } from "./props.js";
+import { setupMemoryPanelUI, setupMemories } from "./memories.js";
+import { setupAudio } from "./audio.js";
+import { setupAvatar } from "./avatar.js";
+import { createPlayerController } from "./player.js";
 
 const app = document.getElementById("app");
-const interactHint = document.getElementById("interactHint");
+const interactHintEl = document.getElementById("interactHint");
 const stamBar = document.getElementById("stamBar");
 
+// Scene
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0xbad8ff);
 scene.fog = new THREE.Fog(0xbad8ff, 75, 280);
 
+// Renderer
 const renderer = new THREE.WebGLRenderer({ antialias:true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.setSize(window.innerWidth, window.innerHeight);
@@ -32,8 +33,10 @@ renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.12;
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 scene.environment = null;
+
 app.appendChild(renderer.domElement);
 
+// Camera + controls
 const camera = new THREE.PerspectiveCamera(65, window.innerWidth / window.innerHeight, 0.1, 420);
 camera.position.set(0, 4, 6);
 
@@ -51,11 +54,78 @@ controls.rotateSpeed = 0.6;
 // Terrain
 buildTerrain({ scene, size: TUNING.TERRAIN_SIZE, seg: TUNING.TERRAIN_SEG });
 
-// Sky + sun (includes world-anchored rays)
+// Sky + sun (+ world anchored rays)
 const sky = setupSkyAndSun({ scene, skyConfig: SKY });
 
-// TODO: move your lights into lighting.js and call setupLighting({scene, sunDir: sky.sunDir, sunTex: sky.sunTex})
+// Lighting (needs sunDir + sunTex)
+setupLighting(scene, { sunDir: sky.sunDir, sunTex: sky.sunTex });
 
+// Clouds + birds
+const clouds = setupClouds(scene, 14);
+const birds = setupBirds(scene, 22);
+
+// Grass blades
+const grassField = createGrassField({
+  count: 120000,
+  radius: TUNING.MAP_RADIUS - 2,
+  bladeH: 0.42,
+  bladeW: 0.045
+});
+scene.add(grassField.mesh);
+
+// Props
+addPillars(scene);
+const scatter = createWorldScatter(scene, { mapRadius: TUNING.MAP_RADIUS });
+scatter.scatterScene(); // don’t await
+
+// Player container
+const player = new THREE.Group();
+player.position.set(0, 0, 8);
+scene.add(player);
+
+const playerVisual = new THREE.Group();
+player.add(playerVisual);
+
+// UI + memories
+const panelUI = setupMemoryPanelUI();
+const memoriesSys = setupMemories(scene, MEMORIES, {
+  onOpenMemory: (mem) => panelUI.open(mem),
+});
+document.getElementById("closeBtn").onclick = () => {
+  panelUI.close();
+  memoriesSys.clearActive();
+};
+
+// Audio
+const audio = setupAudio();
+
+// Avatar
+const avatar = setupAvatar({
+  playerVisual,
+  avatarUrl: AVATAR_URL,
+  anims: ANIMS,
+  minTracksForRun: TUNING.MIN_TRACKS_FOR_RUN
+});
+avatar.init().catch(e => console.error("Avatar init failed:", e));
+
+// Player controller (movement + camera)
+const playerCtl = createPlayerController({
+  player,
+  playerVisual,
+  controls,
+  tuning: TUNING,
+  staminaEl: stamBar,
+  playFootstep: audio.playFootstep,
+  setWindStrength: audio.setWindStrength,
+  onJumpStart: () => avatar.onJumpStart(),
+  onCancelDance: () => avatar.cancelDance(),
+  avatarApi: avatar,
+});
+
+controls.target.copy(player.position).add(new THREE.Vector3(0, TUNING.LOOK_HEIGHT, 0));
+controls.update();
+
+// Loop
 const clock = new THREE.Clock();
 
 function animate(){
@@ -63,14 +133,23 @@ function animate(){
   const dt = Math.min(clock.getDelta(), 0.033);
   const t = clock.elapsedTime;
 
-  // TODO: updatePlayer(dt), updateCamera(dt), clouds, birds, grass, etc.
+  const st = playerCtl.updatePlayer(dt);
+  playerCtl.updateCamera(dt);
 
-  // sun billboards (world anchored)
-  sky.updateSunBillboards(camera, t);
+  clouds.update(dt);
+  birds.update(t);
+
+  sky.update(camera, t);
+
+  grassField.update(t, player.position, st.isMoving);
+
+  memoriesSys.update(t);
+  memoriesSys.checkTriggers(player.position, { interactHintEl });
+
+  avatar.update(dt);
 
   renderer.render(scene, camera);
 }
-
 animate();
 
 window.addEventListener("resize", () => {
