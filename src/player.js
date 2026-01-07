@@ -11,7 +11,8 @@ export function createPlayerController({
   setWindStrength,
   onJumpStart,
   onCancelDance,
-  avatarApi, // optional (for locomotion)
+  avatarApi,
+  colliders = [], // ✅ add this
 }){
   const keys = new Set();
   let jumpRequested = false;
@@ -27,6 +28,41 @@ export function createPlayerController({
 
   const tmpVec = new THREE.Vector3();
 
+  const PLAYER_RADIUS = 0.55;
+  
+  function resolveCollisionsXZ(pos, y) {
+    // do a few passes to handle multiple overlaps nicely
+    for (let iter = 0; iter < 3; iter++) {
+      let any = false;
+  
+      for (const c of colliders) {
+        // optional: only collide if within vertical range
+        if (y < c.yMin || y > c.yMax) continue;
+  
+        const dx = pos.x - c.x;
+        const dz = pos.z - c.z;
+        const d2 = dx*dx + dz*dz;
+  
+        const min = PLAYER_RADIUS + c.r;
+        const min2 = min * min;
+  
+        if (d2 < min2) {
+          const d = Math.sqrt(Math.max(d2, 1e-8));
+          const nx = dx / d;
+          const nz = dz / d;
+          const push = (min - d);
+  
+          pos.x += nx * push;
+          pos.z += nz * push;
+  
+          any = true;
+        }
+      }
+  
+      if (!any) break;
+    }
+  }
+  
   function clampToMap(pos) {
     const d = Math.hypot(pos.x, pos.z);
     if (d > tuning.MAP_RADIUS) {
@@ -90,8 +126,18 @@ export function createPlayerController({
     if (isMoving) {
       const control = isJumping ? tuning.AIR_CONTROL : 1.0;
       tmpVec.normalize().multiplyScalar(speed * control * dt);
-      player.position.add(tmpVec);
-      clampToMap(player.position);
+    
+      // propose new position
+      const nextPos = player.position.clone().add(tmpVec);
+    
+      // keep in map
+      clampToMap(nextPos);
+    
+      // collide in XZ (use current visual ground y as "player height")
+      resolveCollisionsXZ(nextPos, playerVisual.position.y);
+    
+      // commit
+      player.position.copy(nextPos);
     }
 
     if (isMoving) {
