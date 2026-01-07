@@ -408,6 +408,17 @@
   }
   // Fixed sun direction (always daylight)
   const sunDir = new THREE.Vector3(0.45, 1.0, 0.25).normalize();
+  
+  // --- World-anchored sun position (inside sky dome) ---
+  const SKY_RADIUS = 500;
+  const SUN_RADIUS = 460; // keep < SKY_RADIUS so it's "on" the dome
+  const sunWorldPos = sunDir.clone().multiplyScalar(SUN_RADIUS);
+  
+  // Place the visible sun disc once (world space)
+  sunSprite.position.copy(sunWorldPos);
+  sunSprite.material.depthTest = false;
+  sunSprite.material.depthWrite = false;
+  
   const shaderSky = makeShaderSky({ sunDir });
   scene.add(shaderSky.skyMesh);
   
@@ -1588,10 +1599,29 @@
     updateCamera(dt);
     updateAnimeClouds(dt);
     
-    // place sunrays slightly in front of camera, facing camera, centered on sun direction
-    sunRays.position.copy(camera.position).addScaledVector(sunDir, 200);
-    sunRays.quaternion.copy(camera.quaternion);
+    // --- Sunrays: world-anchored at the sun, billboard toward camera ---
+    sunRays.position.copy(sunWorldPos);
+    sunRays.lookAt(camera.position);
+    
+    // Keep rays visually similar size on screen by scaling with distance
+    const d = camera.position.distanceTo(sunWorldPos);
+    const desiredWorldSize = d * 0.35;           // tweak 0.25..0.55 to taste
+    const baseSize = 90;                          // your PlaneGeometry(90,90)
+    const s = desiredWorldSize / baseSize;
+    sunRays.scale.set(s, s, s);
+    
     sunRays.material.uniforms.uTime.value = clock.elapsedTime;
+
+    // Sun disc anchored to same world position
+    sunSprite.position.copy(sunWorldPos);
+    
+    // Optional: keep sun disc roughly constant on screen too
+    const ds = camera.position.distanceTo(sunWorldPos);
+    const sunBase = 38;                // your initial sunSprite.scale
+    const sunScale = (ds * 0.12) / sunBase;  // tweak 0.08..0.16
+    sunSprite.scale.setScalar(sunBase * sunScale);
+    sunSprite.lookAt(camera.position);
+    
     updateBirds(clock.elapsedTime, dt);
     shaderSky.mat.uniforms.uTime.value = clock.elapsedTime;
   
