@@ -156,7 +156,7 @@ export function createWorldScatter(scene, { mapRadius = 95 } = {}) {
     t.scale.setScalar(s);
     scene.add(t);
 
-    const col = makeColliderFromObject(t, { inflate: 0.35, maxR: 2 });
+    const col = makeColliderFromObject(t, { inflate: 0.35, maxR: 4 });
     if (col) colliders.push(col);
 
     return t;
@@ -246,7 +246,7 @@ export function createWorldScatter(scene, { mapRadius = 95 } = {}) {
       grp.add(m);
 
       // collider for each mountain chunk
-      const col = makeColliderFromObject(m, { inflate: colliderInflate, yPad: 5.0, maxR: 75 });
+      const col = makeColliderFromObject(m, { inflate: colliderInflate, yPad: 5.0, maxR: 150 });
       if (col) colliders.push(col);
     }
 
@@ -305,7 +305,7 @@ export function createWorldScatter(scene, { mapRadius = 95 } = {}) {
       url: "assets/models/Car.glb",
       x: 18, z: -14,
       rot: 1.2,
-      scale: 1.5,
+      scale: 2,
       yOffset: 0.0,
       colliderInflate: 0.6,
     });
@@ -314,7 +314,7 @@ export function createWorldScatter(scene, { mapRadius = 95 } = {}) {
       url: "assets/models/Bench.glb",
       x: -14, z: -8,
       rot: -0.4,
-      scale: 0.2,
+      scale: 0.4,
       yOffset: 0.0,
       colliderInflate: 0.4,
     });
