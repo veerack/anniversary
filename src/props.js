@@ -176,7 +176,15 @@ export function createWorldScatter(scene, { mapRadius = 95 } = {}) {
     
       // make it absurdly big so you can’t miss it
       m.scale.setScalar(200);
-    
+
+      const dbgCube = new THREE.Mesh(
+        new THREE.BoxGeometry(20, 20, 20),
+        new THREE.MeshNormalMaterial()
+      );
+      dbgCube.position.copy(m.position);
+      scene.add(dbgCube);
+      console.log("[debug] cube added at", dbgCube.position);
+      
       scene.add(m);
     
       // show its bounds
@@ -185,14 +193,6 @@ export function createWorldScatter(scene, { mapRadius = 95 } = {}) {
     
       console.log("[mountain] debug added", m);
     }
-
-    const dbgCube = new THREE.Mesh(
-      new THREE.BoxGeometry(20, 20, 20),
-      new THREE.MeshNormalMaterial()
-    );
-    dbgCube.position.copy(m.position);
-    scene.add(dbgCube);
-    console.log("[debug] cube added at", dbgCube.position);
     
     // --- Mountains first (so "world boundary" exists immediately) ---
     addMountainRing({
