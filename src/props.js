@@ -183,8 +183,10 @@ export function createWorldScatter(scene, { mapRadius = 95 } = {}) {
 
       placeOnTerrain(m, x, z, yOffset);
 
-      // Face inward (only yaw)
-      m.rotation.y = (-ang + Math.PI) + (Math.random() * 2 - 1) * yawJitter;
+      m.rotation.y =
+        (-ang + Math.PI) +
+        (Math.random() * 2 - 1) * yawJitter +
+        (Math.random() * Math.PI * 2) * 0.02; // tiny extra variety
 
       const s = scale * (1 + (Math.random() * 2 - 1) * scaleJitter);
       m.scale.setScalar(s);
@@ -201,14 +203,37 @@ export function createWorldScatter(scene, { mapRadius = 95 } = {}) {
     await preloadMountain();
 
     // --- Mountains first (world boundary) ---
+    // Ring 1 (closest, dense)
     spawnMountainRing({
-      count: 14,
-      ringOffset: 18,
-      yOffset: -2.2,
-      scale: 0.35,
-      scaleJitter: 0.25,
-      yawJitter: 0.25,
-      radiusJitter: 6.0,
+      count: 44,
+      ringOffset: 42,
+      yOffset: -3.2,
+      scale: 0.55,
+      scaleJitter: 0.35,
+      yawJitter: 0.35,
+      radiusJitter: 10.0,
+    });
+    
+    // Ring 2 (a bit farther, fills gaps)
+    spawnMountainRing({
+      count: 56,
+      ringOffset: 62,
+      yOffset: -6.0,
+      scale: 0.75,
+      scaleJitter: 0.40,
+      yawJitter: 0.45,
+      radiusJitter: 14.0,
+    });
+    
+    // Ring 3 (far silhouette layer)
+    spawnMountainRing({
+      count: 64,
+      ringOffset: 86,
+      yOffset: -10.0,
+      scale: 1.05,
+      scaleJitter: 0.45,
+      yawJitter: 0.55,
+      radiusJitter: 18.0,
     });
 
     // --- Trees ---
