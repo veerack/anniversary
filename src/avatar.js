@@ -80,21 +80,24 @@ export function setupAvatar({ playerVisual, avatarUrl, anims, minTracksForRun })
     const rumba = remapClipToAvatarBones(stripRootTranslation(rumbaRaw), avatarRoot, "Rumba");
     const salsa = remapClipToAvatarBones(stripRootTranslation(salsaRaw), avatarRoot, "Salsa");
 
+    actions.Idle = mixer.clipAction(idle);
+    actions.Walk = mixer.clipAction(walk);
+    actions.Run  = mixer.clipAction(run);     // wherever you create Run
+    actions.Jump = mixer.clipAction(jump);
+    
+    actions.StartWalk = mixer.clipAction(startWalk);
+    actions.StopWalk  = mixer.clipAction(stopWalk);
     actions.Samba = mixer.clipAction(samba);
     actions.Rumba = mixer.clipAction(rumba);
     actions.Salsa = mixer.clipAction(salsa);
-    actions.StartWalk = mixer.clipAction(startWalk);
-    actions.StopWalk  = mixer.clipAction(stopWalk);
-
-    // one-shots
+    
+    // now it’s safe
     for (const k of ["StartWalk","StopWalk","Jump","Samba","Rumba","Salsa"]) {
-      actions[k].loop = THREE.LoopOnce;
-      actions[k].clampWhenFinished = true;
+      const a = actions[k];
+      if (!a) { console.error("[avatar] missing action", k); continue; }
+      a.loop = THREE.LoopOnce;
+      a.clampWhenFinished = true;
     }
-
-    actions.Idle = mixer.clipAction(idle);
-    actions.Walk = mixer.clipAction(walk);
-    actions.Jump = mixer.clipAction(jump);
 
     mixer.addEventListener("finished", (e) => {
       // jump bookkeeping (keep yours)
