@@ -102,7 +102,7 @@ export function addPillars(scene, colliders) {
 
     // collider
     const col = makeColliderFromObject(p, { inflate: 0.35 });
-    if (col) colliders.push(col);
+    if (col && colliders) colliders.push(col);
 
     return p;
   }
