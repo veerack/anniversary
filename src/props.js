@@ -246,7 +246,7 @@ export function createWorldScatter(scene, { mapRadius = 95 } = {}) {
       grp.add(m);
 
       // collider for each mountain chunk
-      const col = makeColliderFromObject(m, { inflate: colliderInflate, yPad: 5.0, maxR: 260 });
+      const col = makeColliderFromObject(m, { inflate: colliderInflate, yPad: 5.0, maxR: 20 });
       if (col) colliders.push(col);
     }
 
