@@ -118,6 +118,7 @@ export function createPlayerController({
     tmpVec.addScaledVector(dirR, right);
 
     const isMoving = tmpVec.lengthSq() > 0;
+    let wasMoving = false;
 
     if (isMoving) {
       const mv = tmpVec.clone().normalize();
@@ -144,10 +145,13 @@ export function createPlayerController({
       player.position.copy(nextPos);
     }
 
-    if (isMoving) {
-      onCancelDance?.();
-    }
+    // only cancel dance when movement STARTS (edge)
+    if (!wasMoving && isMoving) onCancelDance?.();
 
+    const startedMoving = !wasMoving && isMoving;
+    if (startedMoving) onCancelDance?.();
+    wasMoving = isMoving;
+    
     const targetGround = terrainHeight(player.position.x, player.position.z);
     visualGroundY = THREE.MathUtils.lerp(visualGroundY, targetGround, 1 - Math.pow(0.0001, dt));
 
