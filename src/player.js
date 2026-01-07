@@ -116,7 +116,9 @@ export function createPlayerController({
     }
 
     // locomotion anim
-    avatarApi?.setLocomotion?.({ isMoving, isRunning, isJumping });
+    if (!isJumping) {
+      avatarApi?.setLocomotion?.({ isMoving, isRunning, isJumping:false });
+    }
 
     // footsteps
     if (!isJumping && isMoving) {
@@ -130,6 +132,19 @@ export function createPlayerController({
       stepTimer = Math.min(stepTimer, 0.08);
     }
 
+    if (avatarApi?.jumpFinished?.() ?? true) {
+      isJumping = false;
+    
+      const movingNow = isMovingNow();
+      const runningNow = keys.has("shift");
+    
+      avatarApi?.setLocomotion?.({
+        isMoving: movingNow,
+        isRunning: runningNow,
+        isJumping: false
+      });
+    }
+    
     // stamina
     if (isRunning && isMoving) stamina = Math.max(0, stamina - dt*0.18);
     else stamina = Math.min(1, stamina + dt*0.10);
