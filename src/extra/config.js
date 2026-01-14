@@ -75,7 +75,7 @@ export const MEMORIES = [
 // movement/tuning
 export const TUNING = {
   WALK_SPEED: 2.6,
-  RUN_SPEED: 8.0,
+  RUN_SPEED: 188.0,
   AIR_CONTROL: 0.65,
   GRAVITY: -18.0,
   JUMP_VEL: 6.4,
