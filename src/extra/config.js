@@ -35,14 +35,14 @@ export const DIALOGUES = {
 export const ANIMS = {
   Idle: "assets/anim/Idle.fbx",
   Walk: "assets/anim/Walk.fbx",
-  Run:  "assets/anim/Run.fbx",
+  Run: "assets/anim/Run.fbx",
   Jump: "assets/anim/Jump.fbx",
   Samba: "assets/anim/Samba2.fbx",
   Rumba: "assets/anim/Rumba.fbx",
   Salsa: "assets/anim/Salsa.fbx",
   SitIdle: "assets/anim/SittingIdle.fbx",
-  StandToSit:  "assets/anim/StandToSit.fbx",
-  SitToStand:  "assets/anim/SitToStand.fbx",
+  StandToSit: "assets/anim/StandToSit.fbx",
+  SitToStand: "assets/anim/SitToStand.fbx",
   Swim: "assets/anim/Swimming.fbx",
 };
 
@@ -66,16 +66,16 @@ export const POPUPS = {
 };
 
 export const MEMORIES = [
-  { id:"first-meet", title:"How we met", text:"Write a short story here.", pos:new THREE.Vector3(-6,0,-4) },
-  { id:"first-date", title:"First date", text:"Where did you go? One detail you remember.", pos:new THREE.Vector3(6,0,-2) },
-  { id:"moment", title:"The moment I knew", text:"One moment that made it clear she’s your person.", pos:new THREE.Vector3(-2,0,7) },
-  { id:"future", title:"What’s next", text:"Something you’re excited to do together this year.", pos:new THREE.Vector3(7,0,7) },
+  { id: "first-meet", title: "How we met", text: "Write a short story here.", pos: new THREE.Vector3(-6, 0, -4) },
+  { id: "first-date", title: "First date", text: "Where did you go? One detail you remember.", pos: new THREE.Vector3(6, 0, -2) },
+  { id: "moment", title: "The moment I knew", text: "One moment that made it clear she’s your person.", pos: new THREE.Vector3(-2, 0, 7) },
+  { id: "future", title: "What’s next", text: "Something you’re excited to do together this year.", pos: new THREE.Vector3(7, 0, 7) },
 ];
 
 // movement/tuning
 export const TUNING = {
   WALK_SPEED: 2.6,
-  RUN_SPEED: 188.0,
+  RUN_SPEED: 5.0,
   AIR_CONTROL: 0.65,
   GRAVITY: -18.0,
   JUMP_VEL: 6.4,
